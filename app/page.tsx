@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { VideoInput } from "@/components/VideoInput";
 import { ProgressCard } from "@/components/ProgressCard";
 import { RecipeCard } from "@/components/RecipeCard";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import { useRecipeStore } from "@/lib/stores/recipeStore";
 import { useToast } from "@/components/ui/use-toast";
 import { ProcessStatus, Recipe } from "@/types/recipe";
@@ -199,6 +200,9 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Install Prompt */}
+      <InstallPrompt />
     </div>
   );
 }
