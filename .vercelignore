@@ -1,0 +1,11 @@
+# Arquivos ignorados no deploy da Vercel
+node_modules
+.next
+.git
+*.md
+!README.md
+CHECKLIST.md
+SETUP.md
+DEPLOYMENT.md
+QUICK_START.md
+

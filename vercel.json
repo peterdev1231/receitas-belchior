@@ -1,0 +1,10 @@
+{
+  "buildCommand": "npm run build",
+  "functions": {
+    "app/api/**/*.ts": {
+      "maxDuration": 300,
+      "memory": 3008
+    }
+  }
+}
+
