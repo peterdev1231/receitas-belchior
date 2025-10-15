@@ -11,7 +11,7 @@ export async function downloadVideoViaAPI(url: string): Promise<{ audioPath: str
   console.log('[BelchiorReceitas] Detectando plataforma...');
   
   // Detectar plataforma
-  const isTikTok = url.includes('tiktok.com');
+  const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok');
   const isInstagram = url.includes('instagram.com');
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
   

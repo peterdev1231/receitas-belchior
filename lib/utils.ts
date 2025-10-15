@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 export function validateVideoUrl(url: string): boolean {
   const patterns = [
     /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/,
-    /^(https?:\/\/)?(www\.)?tiktok\.com\/.+$/,
+    /^(https?:\/\/)?(www\.|vm\.)?tiktok\.com\/.+$/,
     /^(https?:\/\/)?(www\.)?instagram\.com\/.+$/,
   ];
   
