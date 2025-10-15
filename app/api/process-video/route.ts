@@ -50,17 +50,27 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // 1. Download do áudio usando sistema híbrido
-    console.log('[BelchiorReceitas] Baixando áudio...');
+    // 1. Download do áudio e extração de metadados
+    console.log('[BelchiorReceitas] Baixando áudio e extraindo metadados...');
     
     let audioPath: string;
     let cleanup: () => Promise<void>;
+    let metadata: any = null;
     
     try {
       const result = await downloadVideoViaAPI(videoUrl);
       audioPath = result.audioPath;
       cleanup = result.cleanup;
+      metadata = result.metadata;
       console.log('[BelchiorReceitas] ✅ Áudio baixado com sucesso');
+      
+      if (metadata) {
+        console.log('[BelchiorReceitas] ✅ Metadados extraídos:', {
+          hasTitle: !!metadata.title,
+          hasDescription: !!metadata.description,
+          descLength: metadata.description?.length || 0,
+        });
+      }
     } catch (error: any) {
       const errorMsg = error?.message || error?.toString() || '';
       console.error('[BelchiorReceitas] ❌ Erro ao baixar áudio:', errorMsg);
@@ -96,17 +106,33 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // 3. Organização com GPT-5-nano ou gpt-4o-mini
+    // 3. Organização com GPT-4o-mini (combinando descrição + transcrição)
     console.log('[BelchiorReceitas] Organizando receita com IA...');
+    
+    // Combinar título, descrição e transcrição
+    const promptCompleto = `${metadata?.title ? `TÍTULO DO VÍDEO: ${metadata.title}\n\n` : ''}${metadata?.description ? `DESCRIÇÃO/CAPTION DO VÍDEO (geralmente contém as quantidades exatas dos ingredientes):\n${metadata.description}\n\n` : ''}ÁUDIO TRANSCRITO (geralmente contém o modo de preparo e detalhes do processo):\n${transcricao}`;
+    
+    console.log('[BelchiorReceitas] Prompt completo preparado:', {
+      hasTitle: !!metadata?.title,
+      hasDescription: !!metadata?.description,
+      transcriptionLength: transcricao.length,
+      totalLength: promptCompleto.length,
+    });
     
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini', // Fallback para modelo disponível
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
             content: `Você é um assistente especializado em organizar receitas culinárias. 
-Analise a transcrição fornecida e extraia as informações em formato JSON estruturado.
+
+IMPORTANTE: Priorize as informações da DESCRIÇÃO/CAPTION DO VÍDEO para quantidades exatas de ingredientes, 
+pois muitos criadores de conteúdo não falam as quantidades no áudio, mas colocam na descrição do vídeo.
+
+O áudio transcrito geralmente contém o modo de preparo e detalhes do processo culinário.
+
+Analise TODAS as informações fornecidas (título, descrição e transcrição) e extraia em formato JSON estruturado.
 Retorne APENAS o JSON, sem texto adicional, sem markdown.
 
 Formato esperado:
@@ -128,7 +154,7 @@ Se alguma informação não estiver disponível, use valores padrão razoáveis.
           },
           {
             role: 'user',
-            content: `Transcrição do vídeo de receita:\n\n${transcricao}`,
+            content: promptCompleto,
           },
         ],
         temperature: 0.3,

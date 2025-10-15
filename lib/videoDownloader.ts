@@ -1,6 +1,51 @@
 // Biblioteca para baixar vídeos de diferentes plataformas
+import { VideoMetadata } from '@/types/recipe';
 
-export async function downloadVideoViaAPI(url: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
+// Extrair metadados do vídeo (descrição, título, etc)
+async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> {
+  try {
+    console.log('[BelchiorReceitas] Extraindo metadados do vídeo...');
+    const { default: YTDlpWrap } = await import('yt-dlp-wrap');
+    const ytDlpWrap = new YTDlpWrap();
+    
+    const metadataJson = await ytDlpWrap.execPromise([
+      url,
+      '--dump-json',
+      '--no-warnings',
+      '--skip-download',
+      '--socket-timeout', '30',
+    ]);
+    
+    const metadata = JSON.parse(metadataJson);
+    
+    const result = {
+      title: metadata.title || metadata.fulltitle || '',
+      description: metadata.description || '',
+      hashtags: metadata.tags || [],
+      duration: metadata.duration || 0,
+      platform: url.includes('youtube') || url.includes('youtu.be') ? 'youtube' as const :
+                url.includes('tiktok') ? 'tiktok' as const :
+                url.includes('instagram') ? 'instagram' as const : undefined,
+    };
+    
+    console.log('[BelchiorReceitas] ✅ Metadados extraídos:', {
+      title: result.title?.substring(0, 50) + '...',
+      hasDescription: !!result.description,
+      descriptionLength: result.description?.length || 0,
+    });
+    
+    return result;
+  } catch (error: any) {
+    console.warn('[BelchiorReceitas] ⚠️ Erro ao extrair metadados:', error?.message?.substring(0, 100));
+    return null;
+  }
+}
+
+export async function downloadVideoViaAPI(url: string): Promise<{ 
+  audioPath: string; 
+  metadata: VideoMetadata | null;
+  cleanup: () => Promise<void> 
+}> {
   const { join } = await import('path');
   const { tmpdir } = await import('os');
   const { writeFile, unlink } = await import('fs/promises');
@@ -10,32 +55,39 @@ export async function downloadVideoViaAPI(url: string): Promise<{ audioPath: str
   
   console.log('[BelchiorReceitas] Detectando plataforma...');
   
+  // PASSO 1: Extrair metadados (descrição, título)
+  const metadata = await extractVideoMetadata(url);
+  
   // Detectar plataforma
   const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok');
   const isInstagram = url.includes('instagram.com');
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
   
+  // PASSO 2: Baixar áudio
+  let result;
   if (isYouTube) {
     // YouTube usa yt-dlp
-    return downloadWithYtDlp(url, audioPath);
-  }
-  
-  if (isTikTok) {
+    result = await downloadWithYtDlp(url, audioPath);
+  } else if (isTikTok) {
     // TikTok usa API de terceiros
-    return downloadTikTokViaAPI(url, audioPath);
-  }
-  
-  if (isInstagram) {
+    result = await downloadTikTokViaAPI(url, audioPath);
+  } else if (isInstagram) {
     // Instagram usa API de terceiros
-    return downloadInstagramViaAPI(url, audioPath);
+    result = await downloadInstagramViaAPI(url, audioPath);
+  } else {
+    // Fallback: tentar com yt-dlp
+    result = await downloadWithYtDlp(url, audioPath);
   }
   
-  // Fallback: tentar com yt-dlp
-  return downloadWithYtDlp(url, audioPath);
+  // Retornar áudio + metadados
+  return {
+    ...result,
+    metadata,
+  };
 }
 
 // Download com yt-dlp (YouTube)
-async function downloadWithYtDlp(url: string, audioPath: string) {
+async function downloadWithYtDlp(url: string, audioPath: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
   const { default: YTDlpWrap } = await import('yt-dlp-wrap');
   
   console.log('[BelchiorReceitas] Usando yt-dlp para YouTube...');
@@ -75,7 +127,7 @@ async function downloadWithYtDlp(url: string, audioPath: string) {
 }
 
 // Download TikTok via API
-async function downloadTikTokViaAPI(url: string, audioPath: string) {
+async function downloadTikTokViaAPI(url: string, audioPath: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
   console.log('[BelchiorReceitas] Baixando TikTok via API...');
   
   // Tentar múltiplas APIs
@@ -202,7 +254,7 @@ async function downloadTikTokViaAPI(url: string, audioPath: string) {
 }
 
 // Download Instagram via API
-async function downloadInstagramViaAPI(url: string, audioPath: string) {
+async function downloadInstagramViaAPI(url: string, audioPath: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
   console.log('[BelchiorReceitas] Baixando Instagram via API...');
   
   // Tentar múltiplas APIs para Instagram

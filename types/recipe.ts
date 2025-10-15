@@ -40,3 +40,11 @@ export interface ProcessResponse {
   error?: string;
 }
 
+export interface VideoMetadata {
+  title?: string;
+  description?: string;
+  hashtags?: string[];
+  duration?: number;
+  platform?: 'youtube' | 'tiktok' | 'instagram';
+}
+
