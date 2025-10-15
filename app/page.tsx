@@ -114,8 +114,12 @@ export default function Home() {
             transition={{ duration: 0.5 }}
             className="flex items-center gap-4"
           >
-            <div className="p-3 bg-gradient-to-br from-amber-400 to-orange-500 rounded-2xl shadow-lg">
-              <ChefHat className="h-10 w-10 text-white" />
+            <div className="rounded-2xl shadow-lg overflow-hidden">
+              <img 
+                src="/logo.png" 
+                alt="Belchior Receitas Logo" 
+                className="h-16 w-16 object-cover"
+              />
             </div>
             <div>
               <h1 className="text-4xl font-bold bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent">
