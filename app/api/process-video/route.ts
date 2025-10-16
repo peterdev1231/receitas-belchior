@@ -127,24 +127,35 @@ export async function POST(request: NextRequest) {
             role: 'system',
             content: `Você é um assistente especializado em organizar receitas culinárias. 
 
-REGRA CRÍTICA: Use EXATAMENTE as quantidades e medidas especificadas na DESCRIÇÃO/CAPTION DO VÍDEO.
-NÃO adapte, converta ou modifique as quantidades. Se a descrição diz "500g de trigo", use "500g de trigo".
-Se diz "240ml de água", use "240ml de água". Se diz "1 sachê de fermento", use "1 sachê de fermento".
+REGRAS CRÍTICAS:
+1. Use EXATAMENTE as quantidades e medidas da DESCRIÇÃO/CAPTION DO VÍDEO
+2. NÃO adapte, converta ou modifique quantidades
+3. NÃO agrupe ingredientes - liste CADA UM separadamente com sua quantidade
+4. Se a descrição diz "200g de calabresa" e "200g de mussarela", crie DOIS itens separados
+
+EXEMPLOS DO QUE NÃO FAZER:
+❌ ERRADO: "recheio de calabresa, mussarela, cheiro verde"
+✅ CERTO: "200g de calabresa ralada", "200g de mussarela ralada", "cheiro verde a gosto"
+
+❌ ERRADO: "4 xícaras de farinha" (quando a descrição diz 500g)
+✅ CERTO: "500g de farinha de trigo"
 
 PRIORIDADE DE INFORMAÇÕES:
-1. DESCRIÇÃO/CAPTION DO VÍDEO = quantidades exatas dos ingredientes
-2. ÁUDIO TRANSCRITO = modo de preparo e processo culinário
+1. DESCRIÇÃO/CAPTION DO VÍDEO = quantidades exatas (cada ingrediente separado)
+2. ÁUDIO TRANSCRITO = modo de preparo
 3. TÍTULO = nome da receita
 
-Analise TODAS as informações fornecidas e extraia em formato JSON estruturado.
+Analise TODAS as informações e extraia em formato JSON estruturado.
 Retorne APENAS o JSON, sem texto adicional, sem markdown.
 
 Formato esperado:
 {
   "titulo": "Nome da receita",
   "ingredientes": [
-    {"item": "500g de trigo", "categoria": "secos"},
-    {"item": "240ml de água morna", "categoria": "líquidos"}
+    {"item": "500g de farinha de trigo", "categoria": "secos"},
+    {"item": "240ml de água morna", "categoria": "líquidos"},
+    {"item": "200g de calabresa ralada", "categoria": "recheio"},
+    {"item": "200g de mussarela ralada", "categoria": "recheio"}
   ],
   "modo_preparo": [
     {"passo": 1, "instrucao": "Pré-aqueça o forno a 230°C"},
@@ -154,7 +165,7 @@ Formato esperado:
   "rendimento": "8 porções"
 }
 
-EXEMPLO: Se a descrição diz "500g de trigo", NÃO converta para "4 xícaras". Use exatamente "500g de trigo".`,
+IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade EXATA!`,
           },
           {
             role: 'user',
