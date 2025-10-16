@@ -127,30 +127,34 @@ export async function POST(request: NextRequest) {
             role: 'system',
             content: `Você é um assistente especializado em organizar receitas culinárias. 
 
-IMPORTANTE: Priorize as informações da DESCRIÇÃO/CAPTION DO VÍDEO para quantidades exatas de ingredientes, 
-pois muitos criadores de conteúdo não falam as quantidades no áudio, mas colocam na descrição do vídeo.
+REGRA CRÍTICA: Use EXATAMENTE as quantidades e medidas especificadas na DESCRIÇÃO/CAPTION DO VÍDEO.
+NÃO adapte, converta ou modifique as quantidades. Se a descrição diz "500g de trigo", use "500g de trigo".
+Se diz "240ml de água", use "240ml de água". Se diz "1 sachê de fermento", use "1 sachê de fermento".
 
-O áudio transcrito geralmente contém o modo de preparo e detalhes do processo culinário.
+PRIORIDADE DE INFORMAÇÕES:
+1. DESCRIÇÃO/CAPTION DO VÍDEO = quantidades exatas dos ingredientes
+2. ÁUDIO TRANSCRITO = modo de preparo e processo culinário
+3. TÍTULO = nome da receita
 
-Analise TODAS as informações fornecidas (título, descrição e transcrição) e extraia em formato JSON estruturado.
+Analise TODAS as informações fornecidas e extraia em formato JSON estruturado.
 Retorne APENAS o JSON, sem texto adicional, sem markdown.
 
 Formato esperado:
 {
   "titulo": "Nome da receita",
   "ingredientes": [
-    {"item": "2 xícaras de farinha", "categoria": "secos"},
-    {"item": "3 ovos", "categoria": "proteínas"}
+    {"item": "500g de trigo", "categoria": "secos"},
+    {"item": "240ml de água morna", "categoria": "líquidos"}
   ],
   "modo_preparo": [
-    {"passo": 1, "instrucao": "Pré-aqueça o forno a 180°C"},
+    {"passo": 1, "instrucao": "Pré-aqueça o forno a 230°C"},
     {"passo": 2, "instrucao": "Misture os ingredientes secos"}
   ],
   "tempo_preparo": "30 minutos",
-  "rendimento": "4 porções"
+  "rendimento": "8 porções"
 }
 
-Se alguma informação não estiver disponível, use valores padrão razoáveis.`,
+EXEMPLO: Se a descrição diz "500g de trigo", NÃO converta para "4 xícaras". Use exatamente "500g de trigo".`,
           },
           {
             role: 'user',
