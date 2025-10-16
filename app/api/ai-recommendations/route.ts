@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       modo_preparo: recipe.modo_preparo.map(passo => passo.instrucao),
       tempo_preparo: recipe.tempo_preparo,
       rendimento: recipe.rendimento,
-      data_criacao: recipe.data_criacao
+      createdAt: recipe.createdAt
     }));
 
     console.log(`[BelchiorReceitas] Analisando ${recipes.length} receitas com IA...`);
