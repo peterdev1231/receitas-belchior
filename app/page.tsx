@@ -5,6 +5,7 @@ import { VideoInput } from "@/components/VideoInput";
 import { ProgressCard } from "@/components/ProgressCard";
 import { RecipeCard } from "@/components/RecipeCard";
 import { InstallPrompt } from "@/components/InstallPrompt";
+import { AIRecommendations } from "@/components/AIRecommendations";
 import { useRecipeStore } from "@/lib/stores/recipeStore";
 import { useToast } from "@/components/ui/use-toast";
 import { ProcessStatus, Recipe } from "@/types/recipe";
@@ -113,23 +114,28 @@ export default function Home() {
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="flex items-center gap-4"
+            className="flex items-center justify-between"
           >
-            <div className="rounded-2xl shadow-lg overflow-hidden">
-              <img 
-                src="/logo.png" 
-                alt="Belchior Receitas Logo" 
-                className="h-16 w-16 object-cover"
-              />
+            <div className="flex items-center gap-4">
+              <div className="rounded-2xl shadow-lg overflow-hidden">
+                <img 
+                  src="/logo.png" 
+                  alt="Belchior Receitas Logo" 
+                  className="h-16 w-16 object-cover"
+                />
+              </div>
+              <div>
+                <h1 className="text-4xl font-bold bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent">
+                  Belchior Receitas
+                </h1>
+                <p className="text-gray-600 mt-1 font-light text-sm">
+                  🎥 Transforme vídeos em receitas estruturadas com IA ✨
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent">
-                Belchior Receitas
-              </h1>
-              <p className="text-gray-600 mt-1 font-light text-sm">
-                🎥 Transforme vídeos em receitas estruturadas com IA ✨
-              </p>
-            </div>
+            
+            {/* Botão de IA */}
+            <AIRecommendations />
           </motion.div>
         </div>
       </header>
