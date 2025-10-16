@@ -29,6 +29,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Se tiver apenas 1 receita, retornar análise simples
+    if (recipes.length === 1) {
+      const recipe = recipes[0];
+      return NextResponse.json({
+        success: true,
+        analysis: {
+          totalRecipes: 1,
+          mostUsedIngredients: recipe.ingredientes.slice(0, 5).map(ing => ing.item),
+          favoriteCategories: ['Primeira receita'],
+          averageTime: recipe.tempo_preparo,
+          recommendations: [],
+          insights: [
+            'Esta é sua primeira receita! Continue adicionando mais para receber recomendações personalizadas.',
+            'Adicione mais receitas para descobrir padrões nos seus ingredientes favoritos.',
+            'Com mais receitas salvas, a IA poderá sugerir variações e combinações interessantes!'
+          ]
+        }
+      });
+    }
+
     // Verificar se a API key está disponível
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -57,44 +77,45 @@ export async function POST(request: NextRequest) {
     console.log(`[BelchiorReceitas] Analisando ${recipes.length} receitas com IA...`);
 
     // Criar prompt para análise
-    const prompt = `Analise as seguintes receitas e forneça insights inteligentes e recomendações personalizadas.
+    const prompt = `Analise as seguintes ${recipes.length} receitas e forneça insights inteligentes.
 
 RECEITAS PARA ANÁLISE:
 ${JSON.stringify(recipesData, null, 2)}
 
 TAREFAS:
-1. Identifique os ingredientes mais usados
+1. Identifique os ingredientes mais usados (top 3-5)
 2. Categorize os tipos de pratos (doces, salgados, massas, pães, etc.)
 3. Calcule o tempo médio de preparo
-4. Gere insights interessantes sobre os padrões culinários
-5. Sugira receitas similares baseadas em ingredientes em comum
-6. Identifique oportunidades de variações ou melhorias
+4. Gere 2-3 insights interessantes sobre os padrões culinários
+5. ${recipes.length >= 3 ? 'Sugira receitas similares baseadas em ingredientes em comum' : 'Gere insights sobre as receitas existentes'}
 
-Retorne APENAS um JSON válido no seguinte formato:
+Retorne APENAS um JSON válido (sem markdown, sem explicações) no seguinte formato:
 {
   "totalRecipes": ${recipes.length},
   "mostUsedIngredients": ["ingrediente1", "ingrediente2", "ingrediente3"],
   "favoriteCategories": ["categoria1", "categoria2"],
   "averageTime": "tempo médio calculado",
   "recommendations": [
-    {
+    ${recipes.length >= 3 ? `{
       "recipeIndex": 0,
-      "reason": "Motivo da recomendação baseado em similaridade",
+      "reason": "Receita similar por usar ingredientes X e Y",
       "similarity": 0.85,
       "category": "categoria do prato"
-    }
+    }` : ''}
   ],
   "insights": [
-    "Insight interessante sobre padrões culinários",
-    "Sugestão de variação ou melhoria"
+    "Insight interessante sobre ingredientes ou técnicas",
+    "Sugestão criativa de variação",
+    "Observação útil sobre as receitas"
   ]
 }
 
 IMPORTANTE: 
-- Seja criativo mas preciso nas recomendações
-- Foque em similaridade de ingredientes e técnicas
-- Forneça insights úteis e acionáveis
-- Mantenha o tom amigável e encorajador`;
+- Se houver menos de 3 receitas, retorne array vazio em "recommendations"
+- Seja específico nos insights, mencionando ingredientes e receitas pelo nome
+- Mantenha o tom amigável e encorajador
+- RETORNE APENAS O JSON, SEM MARKDOWN (```json)`;
+
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -117,12 +138,21 @@ IMPORTANTE:
       throw new Error('Resposta vazia da OpenAI');
     }
 
+    // Limpar resposta (remover markdown se existir)
+    let cleanedResponse = responseText.trim();
+    if (cleanedResponse.startsWith('```json')) {
+      cleanedResponse = cleanedResponse.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    } else if (cleanedResponse.startsWith('```')) {
+      cleanedResponse = cleanedResponse.replace(/^```\n?/, '').replace(/\n?```$/, '');
+    }
+
     // Parsear resposta JSON
     let analysis: AIAnalysis;
     try {
-      analysis = JSON.parse(responseText);
+      analysis = JSON.parse(cleanedResponse);
     } catch (parseError) {
       console.error('[BelchiorReceitas] Erro ao parsear resposta da IA:', parseError);
+      console.error('[BelchiorReceitas] Resposta recebida:', cleanedResponse.substring(0, 500));
       throw new Error('Resposta inválida da IA');
     }
 
