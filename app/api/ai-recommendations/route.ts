@@ -114,7 +114,7 @@ IMPORTANTE:
 - Se houver menos de 3 receitas, retorne array vazio em "recommendations"
 - Seja específico nos insights, mencionando ingredientes e receitas pelo nome
 - Mantenha o tom amigável e encorajador
-- RETORNE APENAS O JSON, SEM MARKDOWN (```json)`;
+- RETORNE APENAS O JSON PURO, SEM MARKDOWN`;
 
 
     const completion = await openai.chat.completions.create({
