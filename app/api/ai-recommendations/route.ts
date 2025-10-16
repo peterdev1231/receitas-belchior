@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Recipe } from '@/types/recipe';
 
 interface AIRecommendation {
-  recipe: Recipe;
+  recipe?: Recipe;
+  recipeIndex?: number;
   reason: string;
   similarity: number;
   category: string;
@@ -127,10 +128,13 @@ IMPORTANTE:
 
     // Mapear índices das receitas para objetos completos
     if (analysis.recommendations) {
-      analysis.recommendations = analysis.recommendations.map(rec => ({
-        ...rec,
-        recipe: recipes[rec.recipeIndex] || recipes[0],
-      }));
+      analysis.recommendations = analysis.recommendations.map(rec => {
+        const recipeIndex = rec.recipeIndex ?? 0;
+        return {
+          ...rec,
+          recipe: recipes[recipeIndex] || recipes[0],
+        };
+      });
     }
 
     console.log('[BelchiorReceitas] ✅ Análise de IA concluída:', {

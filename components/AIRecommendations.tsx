@@ -229,12 +229,12 @@ export function AIRecommendations() {
                       <div>
                         <h3 className="text-xl font-semibold mb-4">Recomendações Personalizadas</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {analysis.recommendations.map((rec, index) => (
+                          {analysis.recommendations.filter(rec => rec.recipe).map((rec, index) => (
                             <Card key={index} className="hover:shadow-lg transition-shadow">
                               <CardHeader>
                                 <div className="flex items-start justify-between">
                                   <div>
-                                    <CardTitle className="text-lg">{rec.recipe.titulo}</CardTitle>
+                                    <CardTitle className="text-lg">{rec.recipe!.titulo}</CardTitle>
                                     <Badge variant="outline" className="mt-2">
                                       {rec.category}
                                     </Badge>
@@ -242,11 +242,11 @@ export function AIRecommendations() {
                                   <div className="text-right text-sm text-gray-500">
                                     <div className="flex items-center gap-1">
                                       <Clock className="h-3 w-3" />
-                                      {rec.recipe.tempo_preparo}
+                                      {rec.recipe!.tempo_preparo}
                                     </div>
                                     <div className="flex items-center gap-1 mt-1">
                                       <Users className="h-3 w-3" />
-                                      {rec.recipe.rendimento}
+                                      {rec.recipe!.rendimento}
                                     </div>
                                   </div>
                                 </div>
