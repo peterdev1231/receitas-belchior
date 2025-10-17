@@ -140,12 +140,28 @@ export async function POST(request: NextRequest) {
     // 3. Organização com GPT-4o-mini (combinando descrição + transcrição)
     console.log('[BelchiorReceitas] Organizando receita com IA...');
     
+    // Limpar emojis da descrição para facilitar extração de quantidades
+    const cleanDescription = (text: string): string => {
+      if (!text) return '';
+      // Remover emojis mas manter o texto
+      return text
+        .replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emojis
+        .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Remove símbolos
+        .replace(/\s+/g, ' ')                    // Normaliza espaços
+        .trim();
+    };
+    
+    const descricaoLimpa = cleanDescription(metadata?.description || '');
+    
     // Combinar título, descrição e transcrição
-    const promptCompleto = `${metadata?.title ? `TÍTULO DO VÍDEO: ${metadata.title}\n\n` : ''}${metadata?.description ? `DESCRIÇÃO/CAPTION DO VÍDEO (geralmente contém as quantidades exatas dos ingredientes):\n${metadata.description}\n\n` : ''}ÁUDIO TRANSCRITO (geralmente contém o modo de preparo e detalhes do processo):\n${transcricao}`;
+    const promptCompleto = idiomaDetectado === 'en' 
+      ? `${metadata?.title ? `VIDEO TITLE: ${metadata.title}\n\n` : ''}${descricaoLimpa ? `⭐ VIDEO DESCRIPTION/CAPTION - INGREDIENT QUANTITIES ARE HERE:\n${descricaoLimpa}\n\n` : ''}TRANSCRIBED AUDIO (preparation steps):\n${transcricao}`
+      : `${metadata?.title ? `TÍTULO DO VÍDEO: ${metadata.title}\n\n` : ''}${descricaoLimpa ? `⭐ DESCRIÇÃO/CAPTION DO VÍDEO - QUANTIDADES DOS INGREDIENTES ESTÃO AQUI:\n${descricaoLimpa}\n\n` : ''}ÁUDIO TRANSCRITO (modo de preparo):\n${transcricao}`;
     
     console.log('[BelchiorReceitas] Prompt completo preparado:', {
       hasTitle: !!metadata?.title,
       hasDescription: !!metadata?.description,
+      descriptionLength: descricaoLimpa.length,
       transcriptionLength: transcricao.length,
       totalLength: promptCompleto.length,
       idioma: idiomaDetectado,
@@ -157,23 +173,29 @@ export async function POST(request: NextRequest) {
         // Prompt em inglês
         return `You are a specialized assistant in organizing cooking recipes.
 
-CRITICAL RULES - READ CAREFULLY:
-1. EXTRACT quantities from VIDEO DESCRIPTION/CAPTION FIRST - this is where exact measurements are!
-2. Use EXACTLY the quantities and measurements specified - DO NOT convert or adapt
-3. DO NOT group ingredients - list EACH ingredient separately with its quantity
-4. If description says "1 cup of peaches" and "1/2 cup of yogurt", create TWO separate items
-5. If NO quantity is given, write "to taste" or estimate from context
-6. Keep the recipe in ENGLISH - DO NOT translate to Portuguese or other languages
+CRITICAL RULES - FOLLOW EXACTLY:
+1. ⭐ LOOK AT THE "VIDEO DESCRIPTION/CAPTION" SECTION - All ingredient quantities are listed there!
+2. COPY the exact quantities from the description (1 cup, 1/2 cup, 2 scoops, 1 tbsp, etc.)
+3. DO NOT write "to taste" if the description has a specific quantity!
+4. DO NOT group ingredients - create separate items for each ingredient
+5. Keep the recipe in ENGLISH - DO NOT translate to Portuguese
 
-EXAMPLES OF CORRECT FORMAT:
-✅ RIGHT: "1 cup of frozen peaches", "1/2 cup of Greek yogurt", "1 tbsp of honey"
-✅ RIGHT: "200g of pepperoni", "200g of mozzarella cheese", "fresh herbs to taste"
-✅ RIGHT: "2 cups of all-purpose flour", "1 tsp of salt"
+THE DESCRIPTION IS THE PRIMARY SOURCE - The audio is just preparation steps!
 
-EXAMPLES OF WRONG FORMAT:
-❌ WRONG: "peaches" (missing quantity!)
-❌ WRONG: "filling with pepperoni, mozzarella, herbs" (grouped ingredients!)
-❌ WRONG: "500ml de água" (translated to Portuguese!)
+EXAMPLES - Study these carefully:
+
+If DESCRIPTION says: "1 cup peach kombucha, 1/2 cup coconut milk, 2 scoops peach yogurt"
+✅ CORRECT OUTPUT:
+  - "1 cup of peach kombucha"
+  - "1/2 cup of coconut milk"
+  - "2 scoops of peach yogurt"
+
+❌ WRONG OUTPUT:
+  - "peach kombucha to taste" (NO! Description has quantity!)
+  - "coconut milk" (NO! Missing quantity!)
+  - "yogurt, milk, kombucha" (NO! Grouped ingredients!)
+
+REMEMBER: The description ALWAYS has the quantities - extract them exactly!
 
 INFORMATION PRIORITY:
 1. VIDEO DESCRIPTION/CAPTION = MAIN SOURCE for exact ingredient quantities
