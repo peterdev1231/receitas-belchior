@@ -17,6 +17,7 @@ export interface Recipe {
   rendimento: string;
   videoUrl: string;
   createdAt: Date;
+  idioma?: string; // 'pt', 'en', 'es', etc.
 }
 
 export type ProcessStatus = 

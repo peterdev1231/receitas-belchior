@@ -84,19 +84,28 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // 2. Transcrição com Whisper
+    // 2. Transcrição com Whisper (com detecção automática de idioma)
     console.log('[BelchiorReceitas] Transcrevendo áudio...');
     let transcricao = '';
+    let idiomaDetectado = 'pt'; // padrão português
     
     try {
       const audioFile: any = createReadStream(audioPath);
       const response = await openai.audio.transcriptions.create({
         file: audioFile,
         model: 'whisper-1',
-        language: 'pt',
+        // Sem 'language' para detecção automática!
       });
       transcricao = response.text;
-      console.log('[BelchiorReceitas] Transcrição concluída:', transcricao.substring(0, 100) + '...');
+      
+      // Whisper detecta automaticamente o idioma
+      // Vamos inferir baseado na transcrição ou usar metadata
+      idiomaDetectado = detectLanguageFromText(transcricao);
+      
+      console.log('[BelchiorReceitas] Transcrição concluída:', {
+        idioma: idiomaDetectado,
+        preview: transcricao.substring(0, 100) + '...'
+      });
     } catch (error: any) {
       console.error('[BelchiorReceitas] Erro na transcrição:', error?.message || error);
       await cleanup();
@@ -104,6 +113,28 @@ export async function POST(request: NextRequest) {
         { success: false, error: `Erro ao transcrever áudio: ${error?.message || 'Erro desconhecido'}` },
         { status: 500 }
       );
+    }
+    
+    // Função auxiliar para detectar idioma do texto
+    function detectLanguageFromText(text: string): string {
+      const lowerText = text.toLowerCase();
+      
+      // Palavras comuns em inglês
+      const englishWords = ['the', 'and', 'cup', 'tablespoon', 'teaspoon', 'mix', 'add', 'bake'];
+      const portugueseWords = ['de', 'com', 'para', 'xícara', 'colher', 'misture', 'adicione', 'asse'];
+      const spanishWords = ['de', 'con', 'para', 'taza', 'cuchara', 'mezcle', 'añade', 'hornea'];
+      
+      const englishCount = englishWords.filter(word => lowerText.includes(` ${word} `)).length;
+      const portugueseCount = portugueseWords.filter(word => lowerText.includes(` ${word} `)).length;
+      const spanishCount = spanishWords.filter(word => lowerText.includes(` ${word} `)).length;
+      
+      if (englishCount > portugueseCount && englishCount > spanishCount) {
+        return 'en';
+      } else if (spanishCount > portugueseCount && spanishCount > englishCount) {
+        return 'es';
+      }
+      
+      return 'pt'; // padrão
     }
     
     // 3. Organização com GPT-4o-mini (combinando descrição + transcrição)
@@ -117,15 +148,82 @@ export async function POST(request: NextRequest) {
       hasDescription: !!metadata?.description,
       transcriptionLength: transcricao.length,
       totalLength: promptCompleto.length,
+      idioma: idiomaDetectado,
     });
     
-    try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Você é um assistente especializado em organizar receitas culinárias. 
+    // Selecionar prompt baseado no idioma detectado
+    const getSystemPrompt = (lang: string): string => {
+      if (lang === 'en') {
+        // Prompt em inglês
+        return `You are a specialized assistant in organizing cooking recipes.
+
+CRITICAL RULES:
+1. Use EXACTLY the quantities and measurements from the VIDEO DESCRIPTION/CAPTION
+2. DO NOT adapt, convert, or modify quantities
+3. DO NOT group ingredients - list EACH ONE separately with its quantity
+4. If description says "200g of pepperoni" and "200g of mozzarella", create TWO separate items
+5. Keep the recipe in ENGLISH - DO NOT translate to Portuguese
+
+EXAMPLES OF WHAT NOT TO DO:
+❌ WRONG: "filling with pepperoni, mozzarella, herbs"
+✅ RIGHT: "200g of pepperoni", "200g of mozzarella", "herbs to taste"
+
+❌ WRONG: "4 cups of flour" (when description says 500g)
+✅ RIGHT: "500g of flour"
+
+INFORMATION PRIORITY:
+1. VIDEO DESCRIPTION/CAPTION = exact quantities (each ingredient separate)
+2. TRANSCRIBED AUDIO = preparation method
+3. TITLE = recipe name
+
+Analyze ALL provided information and extract in structured JSON format.
+Return ONLY the JSON, no additional text, no markdown.
+
+Expected format:
+{
+  "titulo": "Recipe Name",
+  "ingredientes": [
+    {"item": "500g of wheat flour", "categoria": "dry"},
+    {"item": "240ml of warm water", "categoria": "liquids"},
+    {"item": "200g of pepperoni", "categoria": "filling"},
+    {"item": "200g of mozzarella", "categoria": "filling"}
+  ],
+  "modo_preparo": [
+    {"passo": 1, "instrucao": "Preheat oven to 450°F"},
+    {"passo": 2, "instrucao": "Mix dry ingredients"}
+  ],
+  "tempo_preparo": "30 minutes",
+  "rendimento": "8 servings"
+}
+
+IMPORTANT: Keep EACH ingredient as a SEPARATE item with its EXACT quantity!`;
+      } else if (lang === 'es') {
+        // Prompt em espanhol
+        return `Eres un asistente especializado en organizar recetas de cocina.
+
+REGLAS CRÍTICAS:
+1. Use EXACTAMENTE las cantidades de la DESCRIPCIÓN/CAPTION DEL VIDEO
+2. NO adaptes, conviertas o modifiques las cantidades
+3. NO agrupe ingredientes - lista CADA UNO por separado con su cantidad
+4. Mantén la receta en ESPAÑOL
+
+Retorna SOLO el JSON, sin texto adicional.
+
+Formato esperado:
+{
+  "titulo": "Nombre de la receta",
+  "ingredientes": [
+    {"item": "500g de harina", "categoria": "secos"}
+  ],
+  "modo_preparo": [
+    {"passo": 1, "instrucao": "Precalienta el horno a 230°C"}
+  ],
+  "tempo_preparo": "30 minutos",
+  "rendimento": "8 porciones"
+}`;
+      } else {
+        // Prompt em português (padrão)
+        return `Você é um assistente especializado em organizar receitas culinárias. 
 
 REGRAS CRÍTICAS:
 1. Use EXATAMENTE as quantidades e medidas da DESCRIÇÃO/CAPTION DO VÍDEO
@@ -165,7 +263,17 @@ Formato esperado:
   "rendimento": "8 porções"
 }
 
-IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade EXATA!`,
+IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade EXATA!`;
+      }
+    };
+    
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: getSystemPrompt(idiomaDetectado),
           },
           {
             role: 'user',
@@ -193,6 +301,7 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
         rendimento: receitaData.rendimento || 'Não especificado',
         videoUrl,
         createdAt: new Date(),
+        idioma: idiomaDetectado, // 'pt', 'en', 'es', etc.
       };
       
       console.log('[BelchiorReceitas] Receita organizada:', recipe.titulo);
