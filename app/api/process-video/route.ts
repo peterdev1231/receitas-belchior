@@ -52,18 +52,26 @@ export async function POST(request: NextRequest) {
     
     // 1. Download do áudio e extração de metadados
     console.log('[BelchiorReceitas] Baixando áudio e extraindo metadados...');
-    
-    let audioPath: string;
+
+    let audioPath: string | undefined;
+    let audioUrl: string | undefined;
     let cleanup: () => Promise<void>;
     let metadata: any = null;
-    
+
     try {
       const result = await downloadVideoViaAPI(videoUrl);
       audioPath = result.audioPath;
+      audioUrl = result.audioUrl;
       cleanup = result.cleanup;
       metadata = result.metadata;
-      console.log('[BelchiorReceitas] ✅ Áudio baixado com sucesso');
-      
+      console.log('[BelchiorReceitas] ✅ Áudio obtido com sucesso');
+
+      if (audioUrl) {
+        console.log('[BelchiorReceitas] 📡 Usando URL remota para transcrição (sem arquivo local)');
+      } else if (audioPath) {
+        console.log('[BelchiorReceitas] 💾 Usando arquivo local para transcrição');
+      }
+
       if (metadata) {
         console.log('[BelchiorReceitas] ✅ Metadados extraídos:', {
           hasTitle: !!metadata.title,
@@ -74,28 +82,55 @@ export async function POST(request: NextRequest) {
     } catch (error: any) {
       const errorMsg = error?.message || error?.toString() || '';
       console.error('[BelchiorReceitas] ❌ Erro ao baixar áudio:', errorMsg);
-      
+
       return NextResponse.json(
-        { 
-          success: false, 
-          error: `Erro ao baixar vídeo: ${errorMsg}` 
+        {
+          success: false,
+          error: `Erro ao baixar vídeo: ${errorMsg}`
         },
         { status: 500 }
       );
     }
-    
+
     // 2. Transcrição com Whisper (com detecção automática de idioma)
     console.log('[BelchiorReceitas] Transcrevendo áudio...');
     let transcricao = '';
     let idiomaDetectado = 'pt'; // padrão português
-    
+
     try {
-      const audioFile: any = createReadStream(audioPath);
-      const response = await openai.audio.transcriptions.create({
-        file: audioFile,
-        model: 'whisper-1',
-        // Sem 'language' para detecção automática!
-      });
+      let response;
+
+      // Se tem audioUrl, fazer fetch e enviar como Buffer
+      if (audioUrl) {
+        console.log('[BelchiorReceitas] Fazendo download da URL e enviando para Whisper...');
+        const audioResponse = await fetch(audioUrl);
+        if (!audioResponse.ok) {
+          throw new Error(`Falha ao download da URL de áudio: ${audioResponse.status}`);
+        }
+        const audioBuffer = await audioResponse.arrayBuffer();
+
+        // Criar um objeto File-like para o Whisper
+        const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
+        const audioFile = new File([audioBlob], 'audio.mp3', { type: 'audio/mpeg' });
+
+        response = await openai.audio.transcriptions.create({
+          file: audioFile as any,
+          model: 'whisper-1',
+          // Sem 'language' para detecção automática!
+        });
+      } else if (audioPath) {
+        // Se tem audioPath, usar createReadStream
+        console.log('[BelchiorReceitas] Enviando arquivo local para Whisper...');
+        const audioFile: any = createReadStream(audioPath);
+        response = await openai.audio.transcriptions.create({
+          file: audioFile,
+          model: 'whisper-1',
+          // Sem 'language' para detecção automática!
+        });
+      } else {
+        throw new Error('Nenhuma fonte de áudio disponível');
+      }
+
       transcricao = response.text;
       
       // Whisper detecta automaticamente o idioma
