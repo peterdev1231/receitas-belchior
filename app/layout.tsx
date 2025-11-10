@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
@@ -10,7 +10,6 @@ export const metadata: Metadata = {
   title: "Belchior Receita 🍳",
   description: "Transforme vídeos de receitas em receitas estruturadas usando IA",
   manifest: "/manifest.json",
-  themeColor: "#f59e0b",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -20,6 +19,10 @@ export const metadata: Metadata = {
     icon: "/icon-192.png",
     apple: "/icon-192.png",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#f59e0b",
 };
 
 export default function RootLayout({

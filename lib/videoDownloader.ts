@@ -59,7 +59,7 @@ export async function downloadVideoViaAPI(url: string): Promise<{
   const metadata = await extractVideoMetadata(url);
   
   // Detectar plataforma
-  const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok');
+  const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok') || url.includes('vt.tiktok');
   const isInstagram = url.includes('instagram.com');
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
   
@@ -130,9 +130,54 @@ async function downloadWithYtDlp(url: string, audioPath: string): Promise<{ audi
 async function downloadTikTokViaAPI(url: string, audioPath: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
   console.log('[BelchiorReceitas] Baixando TikTok via API...');
   
-  // Tentar múltiplas APIs
+  const { writeFile, unlink, access } = await import('fs/promises');
+  const { constants } = await import('fs');
+  
+  // Função auxiliar para verificar se arquivo existe
+  const fileExists = async (path: string): Promise<boolean> => {
+    try {
+      await access(path, constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  
+  // ESTRATÉGIA 1: Tentar yt-dlp diretamente na URL primeiro (pode funcionar para vídeos públicos)
+  try {
+    console.log('[BelchiorReceitas] Tentando yt-dlp diretamente na URL do TikTok...');
+    const { default: YTDlpWrap } = await import('yt-dlp-wrap');
+    const ytDlpWrap = new YTDlpWrap();
+    
+    await ytDlpWrap.execPromise([
+      url,
+      '-x',
+      '--audio-format', 'mp3',
+      '--audio-quality', '5',
+      '-o', audioPath,
+      '--no-playlist',
+      '--no-warnings',
+      '--extractor-retries', '3',
+      '--socket-timeout', '30',
+    ]);
+    
+    // Verificar se o arquivo foi criado
+    if (await fileExists(audioPath)) {
+      console.log('[BelchiorReceitas] ✅ TikTok baixado diretamente com yt-dlp');
+      return {
+        audioPath,
+        cleanup: async () => {
+          await unlink(audioPath).catch(() => {});
+        }
+      };
+    }
+  } catch (error: any) {
+    console.log('[BelchiorReceitas] yt-dlp direto falhou, tentando APIs:', error?.message?.substring(0, 100));
+  }
+  
+  // ESTRATÉGIA 2: Usar APIs para obter URL do vídeo e depois converter
   const apis = [
-    // API 1: TikWM com vídeo completo
+    // API 1: TikWM
     async () => {
       console.log('[BelchiorReceitas] Tentando TikWM...');
       const response = await fetch('https://www.tikwm.com/api/', {
@@ -148,7 +193,6 @@ async function downloadTikTokViaAPI(url: string, audioPath: string): Promise<{ a
       console.log('[BelchiorReceitas] TikWM response:', data.code);
       
       if (data.code === 0 && data.data) {
-        // Pegar URL do vídeo (não música) para extrair áudio depois
         const videoUrl = data.data.play || data.data.wmplay || data.data.hdplay;
         if (videoUrl) {
           console.log('[BelchiorReceitas] TikWM: URL do vídeo obtida');
@@ -158,99 +202,177 @@ async function downloadTikTokViaAPI(url: string, audioPath: string): Promise<{ a
       throw new Error('TikWM não retornou vídeo');
     },
     
-    // API 2: yt-dlp como fallback robusto
+    // API 2: TikTokDownloader API alternativa
     async () => {
-      console.log('[BelchiorReceitas] Tentando yt-dlp para TikTok...');
-      const { default: YTDlpWrap } = await import('yt-dlp-wrap');
-      const ytDlpWrap = new YTDlpWrap();
+      console.log('[BelchiorReceitas] Tentando TikTokDownloader API...');
+      const response = await fetch(`https://api16-normal-useast5.us.tiktokv.com/aweme/v1/feed/?aweme_id=${url.match(/video\/(\d+)/)?.[1] || ''}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+        },
+      });
       
-      await ytDlpWrap.execPromise([
-        url,
-        '-x',
-        '--audio-format', 'mp3',
-        '--audio-quality', '5',
-        '-o', audioPath,
-        '--no-playlist',
-        '--no-warnings',
-        '--extractor-retries', '5',
-        '--socket-timeout', '30',
-      ]);
+      if (!response.ok) throw new Error('API alternativa falhou');
+      const data = await response.json();
       
-      return { type: 'saved', url: null };
+      // Tentar extrair URL do vídeo da resposta
+      const videoUrl = data?.aweme_list?.[0]?.video?.play_addr?.url_list?.[0];
+      if (videoUrl) {
+        console.log('[BelchiorReceitas] TikTokDownloader: URL obtida');
+        return { type: 'video', url: videoUrl };
+      }
+      throw new Error('URL não encontrada na resposta');
     }
   ];
   
-  let result = null;
+  let videoUrl: string | null = null;
   for (const apiCall of apis) {
     try {
-      result = await apiCall();
-      if (result) break;
+      const result = await apiCall();
+      if (result && result.type === 'video' && result.url) {
+        videoUrl = result.url;
+        break;
+      }
     } catch (error: any) {
       console.warn('[BelchiorReceitas] API TikTok falhou:', error?.message?.substring(0, 100));
     }
   }
   
-  if (!result) {
-    throw new Error('Não foi possível baixar do TikTok. Tente um vídeo público do YouTube.');
+  if (!videoUrl) {
+    throw new Error('Não foi possível obter URL do vídeo do TikTok. Tente um vídeo público do YouTube.');
   }
   
-  // Se yt-dlp já salvou
-  if (result.type === 'saved') {
-    const { unlink } = await import('fs/promises');
-    return {
-      audioPath,
-      cleanup: async () => {
-        await unlink(audioPath).catch(() => {});
-      }
-    };
-  }
-  
-  // Baixar o vídeo e extrair áudio com ffmpeg (se disponível) ou salvar como está
-  console.log('[BelchiorReceitas] Baixando vídeo do TikTok...');
-  const videoResponse = await fetch(result.url);
-  if (!videoResponse.ok) {
-    throw new Error('Falha ao baixar vídeo do TikTok');
-  }
-  
-  const videoBuffer = await videoResponse.arrayBuffer();
-  
-  // Salvar como MP4 primeiro, depois tentar converter
-  const { writeFile, unlink } = await import('fs/promises');
-  const { join } = await import('path');
-  const { tmpdir } = await import('os');
-  
-  const videoPath = audioPath.replace('.mp3', '.mp4');
-  await writeFile(videoPath, Buffer.from(videoBuffer));
-  
-  // Tentar converter com yt-dlp (que usa ffmpeg internamente)
+  // ESTRATÉGIA A: Tentar usar yt-dlp diretamente na URL do vídeo para extrair áudio
   try {
+    console.log('[BelchiorReceitas] Tentando extrair áudio diretamente da URL do vídeo...');
     const { default: YTDlpWrap } = await import('yt-dlp-wrap');
     const ytDlpWrap = new YTDlpWrap();
     
     await ytDlpWrap.execPromise([
-      videoPath,
+      videoUrl,
       '-x',
       '--audio-format', 'mp3',
+      '--audio-quality', '5',
       '-o', audioPath,
+      '--no-warnings',
+      '--referer', 'https://www.tiktok.com/',
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     ]);
     
-    await unlink(videoPath).catch(() => {});
-    console.log('[BelchiorReceitas] ✅ TikTok convertido para áudio');
-  } catch (conversionError) {
-    // Se não conseguir converter, usar o vídeo mesmo
-    console.warn('[BelchiorReceitas] Usando vídeo sem conversão');
-    await unlink(videoPath).catch(() => {});
-    
-    // Salvar o vídeo como "áudio" mesmo
-    await writeFile(audioPath, Buffer.from(videoBuffer));
+    // Verificar se o arquivo foi criado
+    if (await fileExists(audioPath)) {
+      console.log('[BelchiorReceitas] ✅ Áudio extraído diretamente da URL com yt-dlp');
+      return {
+        audioPath,
+        cleanup: async () => {
+          await unlink(audioPath).catch(() => {});
+        }
+      };
+    }
+  } catch (error: any) {
+    console.log('[BelchiorReceitas] Extração direta falhou, baixando vídeo e convertendo:', error?.message?.substring(0, 100));
   }
   
-  return {
-    audioPath,
-    cleanup: async () => {
-      await unlink(audioPath).catch(() => {});
+  // ESTRATÉGIA B: Baixar vídeo e converter manualmente
+  console.log('[BelchiorReceitas] Baixando vídeo do TikTok...');
+  const videoResponse = await fetch(videoUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Referer': 'https://www.tiktok.com/',
+    },
+  });
+  
+  if (!videoResponse.ok) {
+    throw new Error(`Falha ao baixar vídeo do TikTok: ${videoResponse.status}`);
+  }
+  
+  const videoBuffer = await videoResponse.arrayBuffer();
+  
+  // Salvar vídeo temporário
+  const videoPath = audioPath.replace('.mp3', '.mp4');
+  await writeFile(videoPath, Buffer.from(videoBuffer));
+  console.log('[BelchiorReceitas] Vídeo baixado, convertendo para áudio...');
+  
+  // Tentar converter usando yt-dlp no arquivo local (com path absoluto)
+  try {
+    const { default: YTDlpWrap } = await import('yt-dlp-wrap');
+    const { resolve } = await import('path');
+    const ytDlpWrap = new YTDlpWrap();
+    
+    const absoluteVideoPath = resolve(videoPath);
+    const absoluteAudioPath = resolve(audioPath);
+    
+    // Converter arquivo local para MP3 usando yt-dlp
+    // yt-dlp pode processar arquivos locais diretamente, mas pode precisar do caminho absoluto
+    await ytDlpWrap.execPromise([
+      absoluteVideoPath,
+      '-x',
+      '--audio-format', 'mp3',
+      '--audio-quality', '5',
+      '-o', absoluteAudioPath,
+      '--no-warnings',
+    ]);
+    
+    // Verificar se a conversão foi bem-sucedida
+    if (await fileExists(audioPath)) {
+      await unlink(videoPath).catch(() => {});
+      console.log('[BelchiorReceitas] ✅ TikTok convertido para áudio com sucesso');
+      
+      return {
+        audioPath,
+        cleanup: async () => {
+          await unlink(audioPath).catch(() => {});
+        }
+      };
+    } else {
+      throw new Error('Arquivo de áudio não foi criado após conversão');
     }
-  };
+  } catch (conversionError: any) {
+    console.warn('[BelchiorReceitas] Conversão com yt-dlp falhou, tentando método alternativo...');
+    
+    // ESTRATÉGIA C: Tentar usar ffmpeg-static (bundled)
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      const { resolve } = await import('path');
+
+      // Importar ffmpeg-static para obter o caminho do executável
+      let ffmpegPath = 'ffmpeg'; // fallback
+      try {
+        const ffmpegStatic = await import('ffmpeg-static');
+        ffmpegPath = ffmpegStatic.default || 'ffmpeg';
+      } catch {
+        console.warn('[BelchiorReceitas] ffmpeg-static não disponível, tentando ffmpeg do sistema');
+      }
+
+      const absoluteVideoPath = resolve(videoPath);
+      const absoluteAudioPath = resolve(audioPath);
+
+      // Tentar usar ffmpeg para converter
+      await execAsync(`"${ffmpegPath}" -i "${absoluteVideoPath}" -vn -acodec libmp3lame -ab 192k -ar 44100 -y "${absoluteAudioPath}"`);
+
+      if (await fileExists(audioPath)) {
+        await unlink(videoPath).catch(() => {});
+        console.log('[BelchiorReceitas] ✅ TikTok convertido para áudio com ffmpeg');
+
+        return {
+          audioPath,
+          cleanup: async () => {
+            await unlink(audioPath).catch(() => {});
+          }
+        };
+      }
+    } catch (ffmpegError: any) {
+      console.warn('[BelchiorReceitas] ffmpeg não disponível ou falhou:', ffmpegError?.message?.substring(0, 100));
+    }
+    
+    // Se tudo falhar, limpar e retornar erro
+    await unlink(videoPath).catch(() => {});
+    await unlink(audioPath).catch(() => {});
+
+    console.error('[BelchiorReceitas] ❌ Erro ao converter vídeo para áudio:', conversionError?.message);
+    throw new Error(`Não foi possível converter o vídeo do TikTok para áudio. ffmpeg-static está instalado, mas houve erro na conversão. Verifique se o vídeo é válido ou tente outro vídeo.`);
+  }
 }
 
 // Download Instagram via API
