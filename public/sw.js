@@ -1,73 +1,100 @@
-const CACHE_NAME = 'belchior-receita-v1';
-const urlsToCache = [
-  '/',
+const CACHE_VERSION = 'v3';
+const STATIC_CACHE = `belchior-receita-static-${CACHE_VERSION}`;
+const RUNTIME_CACHE = `belchior-receita-runtime-${CACHE_VERSION}`;
+
+// Só pré-cachear ativos estáticos que não quebram atualização do app shell
+const PRECACHE_URLS = [
   '/logo.png',
   '/icon-192.png',
   '/icon-512.png',
+  '/manifest.json',
 ];
 
-// Instalar service worker e cachear recursos
+// Helpers
+const shouldHandleFetch = (request) => {
+  if (request.method !== 'GET') return false;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return false; // deixar CDN/externo livre
+  if (url.pathname.startsWith('/api/')) return false; // não cachear API
+  if (url.pathname === '/sw.js') return false; // nunca cachear o próprio SW
+  return true;
+};
+
+const cacheFirst = async (request, cacheName) => {
+  const cache = await caches.open(cacheName);
+  const cachedResponse = await cache.match(request);
+  if (cachedResponse) return cachedResponse;
+
+  const networkResponse = await fetch(request);
+  if (networkResponse && networkResponse.status === 200) {
+    cache.put(request, networkResponse.clone());
+  }
+  return networkResponse;
+};
+
+const networkFirst = async (request) => {
+  const cache = await caches.open(RUNTIME_CACHE);
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.status === 200) {
+      cache.put(request, fresh.clone());
+    }
+    return fresh;
+  } catch (err) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    return new Response('Você está offline e o recurso não está em cache.', {
+      status: 503,
+      statusText: 'Offline',
+    });
+  }
+};
+
 self.addEventListener('install', (event) => {
   console.log('[SW] Instalando service worker...');
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[SW] Cache aberto');
-        return cache.addAll(urlsToCache);
-      })
+    caches.open(STATIC_CACHE).then((cache) => {
+      console.log('[SW] Cache estático aberto');
+      return cache.addAll(PRECACHE_URLS);
+    })
   );
   self.skipWaiting();
 });
 
-// Ativar service worker
 self.addEventListener('activate', (event) => {
   console.log('[SW] Ativando service worker...');
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
+    caches.keys().then((cacheNames) =>
+      Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
+          if (![STATIC_CACHE, RUNTIME_CACHE].includes(cacheName)) {
             console.log('[SW] Removendo cache antigo:', cacheName);
             return caches.delete(cacheName);
           }
         })
-      );
-    })
+      )
+    )
   );
   self.clients.claim();
 });
 
-// Interceptar requisições e servir do cache quando offline
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - retornar resposta do cache
-        if (response) {
-          return response;
-        }
-        
-        // Clonar request
-        const fetchRequest = event.request.clone();
-        
-        return fetch(fetchRequest).then((response) => {
-          // Verificar se resposta válida
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          
-          // Clonar resposta
-          const responseToCache = response.clone();
-          
-          // Adicionar ao cache
-          caches.open(CACHE_NAME)
-            .then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          
-          return response;
-        });
-      })
-  );
-});
+  if (!shouldHandleFetch(event.request)) return;
 
+  const url = new URL(event.request.url);
+
+  // Navegações usam network-first para garantir HTML/JS atualizados (evita ficar preso em versão antiga)
+  if (event.request.mode === 'navigate') {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  // Ativos pré-cacheados (ícones, manifest)
+  if (PRECACHE_URLS.includes(url.pathname)) {
+    event.respondWith(cacheFirst(event.request, STATIC_CACHE));
+    return;
+  }
+
+  // Demais ativos de mesma origem (CSS/JS/imagens) usam cache-first com fallback para rede
+  event.respondWith(cacheFirst(event.request, RUNTIME_CACHE));
+});
