@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const STATIC_CACHE = `belchior-receita-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `belchior-receita-runtime-${CACHE_VERSION}`;
 
@@ -75,6 +75,10 @@ self.addEventListener('activate', (event) => {
             console.log('[SW] Removendo cache antigo:', cacheName);
             return caches.delete(cacheName);
           }
+          // Mesmo que o nome seja igual, força limpar dentro para evitar lixo
+          return caches.open(cacheName).then((cache) => cache.keys().then((entries) =>
+            Promise.all(entries.map((req) => cache.delete(req)))
+          ));
         })
       )
     )
