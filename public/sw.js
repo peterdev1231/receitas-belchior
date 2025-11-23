@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const STATIC_CACHE = `belchior-receita-static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `belchior-receita-runtime-${CACHE_VERSION}`;
 
@@ -32,8 +32,8 @@ const cacheFirst = async (request, cacheName) => {
   return networkResponse;
 };
 
-const networkFirst = async (request) => {
-  const cache = await caches.open(RUNTIME_CACHE);
+const networkFirst = async (request, cacheName = RUNTIME_CACHE) => {
+  const cache = await caches.open(cacheName);
   try {
     const fresh = await fetch(request);
     if (fresh && fresh.status === 200) {
@@ -48,6 +48,10 @@ const networkFirst = async (request) => {
       statusText: 'Offline',
     });
   }
+};
+
+const isAppShellAsset = (request) => {
+  return ['document', 'script', 'style', 'manifest'].includes(request.destination);
 };
 
 self.addEventListener('install', (event) => {
@@ -85,6 +89,12 @@ self.addEventListener('fetch', (event) => {
 
   // Navegações usam network-first para garantir HTML/JS atualizados (evita ficar preso em versão antiga)
   if (event.request.mode === 'navigate') {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  // App shell assets (JS/CSS/manifest) usam network-first para evitar versão antiga
+  if (isAppShellAsset(event.request)) {
     event.respondWith(networkFirst(event.request));
     return;
   }
