@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ChefHat, Clock, Users, Trash2, Image as ImageIcon, Loader2, RefreshCcw } from "lucide-react";
+import { ChefHat, Clock, Users, Trash2, Image as ImageIcon, Loader2, RefreshCcw, Maximize2, X } from "lucide-react";
 import { Recipe } from "@/types/recipe";
 import { motion } from "framer-motion";
 import { useRecipeStore } from "@/lib/stores/recipeStore";
@@ -19,6 +19,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
   const [imageError, setImageError] = useState(false);
   const [hasRetriedImage, setHasRetriedImage] = useState(false);
   const [showImage, setShowImage] = useState(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const { deleteRecipe, updateRecipe } = useRecipeStore();
   const { toast } = useToast();
 
@@ -26,11 +27,13 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
     // Reset erros quando a receita trouxer uma imagem nova
     setImageError(false);
     setHasRetriedImage(false);
+    setIsImageModalOpen(false);
   }, [recipe.imageUrl]);
 
   useEffect(() => {
     // Nova receita, resetar visibilidade da imagem
     setShowImage(false);
+    setIsImageModalOpen(false);
   }, [recipe.id]);
 
   const handleDelete = async () => {
@@ -208,7 +211,15 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
                     Não conseguimos carregar a capa. Tente novamente.
                   </div>
                 )}
-                <div className="absolute top-3 right-3">
+                <div className="absolute top-3 right-3 flex gap-2">
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    className="rounded-full shadow"
+                    onClick={() => setIsImageModalOpen(true)}
+                  >
+                    <Maximize2 className="h-4 w-4" />
+                  </Button>
                   <Button
                     size="icon"
                     variant="secondary"
@@ -257,7 +268,7 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
             <Button
               variant="default"
               className="w-full bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-400 text-white shadow-lg hover:shadow-xl border-0 rounded-xl py-6 font-semibold hover:scale-[1.01]"
-              onClick={handleGenerateImage}
+              onClick={() => handleGenerateImage()}
               disabled={isGeneratingImage}
             >
               {isGeneratingImage ? (
@@ -284,6 +295,28 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Modal de imagem em tamanho original */}
+      {isImageModalOpen && recipe.imageUrl && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden">
+            <button
+              className="absolute top-3 right-3 bg-white/80 hover:bg-white text-gray-700 rounded-full p-2 shadow"
+              onClick={() => setIsImageModalOpen(false)}
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div className="bg-black">
+              <img
+                src={recipe.imageUrl}
+                alt={`Capa de ${recipe.titulo}`}
+                className="w-full h-full max-h-[80vh] object-contain"
+                onError={handleImageError}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
