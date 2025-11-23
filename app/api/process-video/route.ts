@@ -55,8 +55,10 @@ export async function POST(request: NextRequest) {
 
     let audioPath: string | undefined;
     let audioUrl: string | undefined;
-    let cleanup: () => Promise<void>;
+    let cleanup: () => Promise<void> = async () => {};
     let metadata: any = null;
+    let thumbnailUrl: string | undefined;
+    let thumbnailSource: string | undefined;
 
     try {
       const result = await downloadVideoViaAPI(videoUrl);
@@ -64,6 +66,8 @@ export async function POST(request: NextRequest) {
       audioUrl = result.audioUrl;
       cleanup = result.cleanup;
       metadata = result.metadata;
+      thumbnailUrl = result.thumbnailUrl;
+      thumbnailSource = result.thumbnailSource;
       console.log('[BelchiorReceitas] ✅ Áudio obtido com sucesso');
 
       if (audioUrl) {
@@ -405,4 +409,3 @@ export async function GET() {
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
   });
 }
-

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ChefHat, Clock, Users, Trash2, Edit3 } from "lucide-react";
+import { ChefHat, Clock, Users, Trash2, Image as ImageIcon, Loader2, RefreshCcw } from "lucide-react";
 import { Recipe } from "@/types/recipe";
 import { motion } from "framer-motion";
 import { useRecipeStore } from "@/lib/stores/recipeStore";
@@ -15,8 +15,23 @@ interface RecipeCardProps {
 
 export function RecipeCard({ recipe }: RecipeCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const { deleteRecipe } = useRecipeStore();
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const [hasRetriedImage, setHasRetriedImage] = useState(false);
+  const [showImage, setShowImage] = useState(false);
+  const { deleteRecipe, updateRecipe } = useRecipeStore();
   const { toast } = useToast();
+
+  useEffect(() => {
+    // Reset erros quando a receita trouxer uma imagem nova
+    setImageError(false);
+    setHasRetriedImage(false);
+  }, [recipe.imageUrl]);
+
+  useEffect(() => {
+    // Nova receita, resetar visibilidade da imagem
+    setShowImage(false);
+  }, [recipe.id]);
 
   const handleDelete = async () => {
     try {
@@ -32,6 +47,64 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
         description: "Não foi possível remover a receita",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleImageError = () => {
+    if (hasRetriedImage) {
+      setImageError(true);
+      return;
+    }
+    setHasRetriedImage(true);
+    setImageError(true);
+    handleGenerateImage();
+  };
+
+  const handleGenerateImage = async (forceFetch = false) => {
+    if (isGeneratingImage) return;
+    if (recipe.imageUrl && !imageError && !forceFetch) {
+      setShowImage(true);
+      return; // já temos imagem, apenas mostrar após clique
+    }
+
+    setIsGeneratingImage(true);
+    setImageError(false);
+
+    try {
+      const response = await fetch("/api/recipe-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ videoUrl: recipe.videoUrl }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data?.success || !data?.imageUrl) {
+        throw new Error(data?.error || "Não foi possível buscar a capa");
+      }
+
+      await updateRecipe(recipe.id, {
+        imageUrl: data.imageUrl,
+        imageSource: data.imageSource,
+        imageFetchedAt: data.imageFetchedAt,
+      });
+
+      toast({
+        title: "Capa encontrada!",
+        description: "Exibindo a imagem do vídeo.",
+      });
+      setIsExpanded(true);
+      setShowImage(true);
+    } catch (error) {
+      console.error("[BelchiorReceitas] Erro ao gerar imagem:", error);
+      toast({
+        title: "Erro ao gerar imagem",
+        description: error instanceof Error ? error.message : "Tente novamente",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingImage(false);
     }
   };
 
@@ -102,6 +175,58 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
             </div>
           </div>
 
+          {/* Capa da receita */}
+          {showImage && recipe.imageUrl && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                  <ImageIcon className="h-4 w-4 text-orange-500" />
+                  Capa do vídeo
+                </h4>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  {recipe.imageSource && (
+                    <span className="px-2 py-1 rounded-full bg-orange-100 text-orange-700 font-medium">
+                      {recipe.imageSource}
+                    </span>
+                  )}
+                  {recipe.imageFetchedAt && (
+                    <span>
+                      Atualizado {new Date(recipe.imageFetchedAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="relative overflow-hidden rounded-xl border border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50">
+                <img
+                  src={recipe.imageUrl}
+                  alt={`Capa de ${recipe.titulo}`}
+                  className="w-full h-48 object-cover"
+                  onError={handleImageError}
+                />
+                {imageError && (
+                  <div className="absolute inset-0 bg-white/80 flex items-center justify-center text-sm text-gray-600">
+                    Não conseguimos carregar a capa. Tente novamente.
+                  </div>
+                )}
+                <div className="absolute top-3 right-3">
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    className="rounded-full shadow"
+                    onClick={() => handleGenerateImage(true)}
+                    disabled={isGeneratingImage}
+                  >
+                    {isGeneratingImage ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCcw className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Modo de preparo (expandido) */}
           {isExpanded && (
             <motion.div
@@ -127,6 +252,28 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
             </motion.div>
           )}
 
+          {/* Ação: Gerar imagem */}
+          <div className="mt-2">
+            <Button
+              variant="default"
+              className="w-full bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-400 text-white shadow-lg hover:shadow-xl border-0 rounded-xl py-6 font-semibold hover:scale-[1.01]"
+              onClick={handleGenerateImage}
+              disabled={isGeneratingImage}
+            >
+              {isGeneratingImage ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                  Buscando capa do vídeo...
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="h-5 w-5 mr-2" />
+                  Gerar imagem
+                </>
+              )}
+            </Button>
+          </div>
+
           {/* Botão expandir */}
           <Button
             variant="outline"
@@ -140,4 +287,3 @@ export function RecipeCard({ recipe }: RecipeCardProps) {
     </motion.div>
   );
 }
-

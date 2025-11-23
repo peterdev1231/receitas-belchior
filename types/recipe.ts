@@ -18,6 +18,10 @@ export interface Recipe {
   videoUrl: string;
   createdAt: Date;
   idioma?: string; // 'pt', 'en', 'es', etc.
+  imageUrl?: string;
+  imageSource?: 'tiktok-cover' | 'yt-thumb' | 'ig-thumb' | 'fallback';
+  imageFetchedAt?: string;
+  imageRequested?: boolean;
 }
 
 export type ProcessStatus = 
@@ -47,5 +51,6 @@ export interface VideoMetadata {
   hashtags?: string[];
   duration?: number;
   platform?: 'youtube' | 'tiktok' | 'instagram';
+  thumbnailUrl?: string;
+  thumbnails?: string[];
 }
-

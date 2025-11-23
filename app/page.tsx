@@ -6,11 +6,14 @@ import { ProgressCard } from "@/components/ProgressCard";
 import { RecipeCard } from "@/components/RecipeCard";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { AIRecommendations } from "@/components/AIRecommendations";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useRecipeStore } from "@/lib/stores/recipeStore";
 import { useToast } from "@/components/ui/use-toast";
 import { ProcessStatus, Recipe } from "@/types/recipe";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChefHat } from "lucide-react";
+import { ChefHat, Search, Plus, X } from "lucide-react";
 
 export default function Home() {
   const { recipes, loadRecipes, addRecipe } = useRecipeStore();
@@ -20,6 +23,10 @@ export default function Home() {
   const [processStatus, setProcessStatus] = useState<ProcessStatus>("idle");
   const [processMessage, setProcessMessage] = useState("");
   const [processProgress, setProcessProgress] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pantryInput, setPantryInput] = useState("");
+  const [pantryItems, setPantryItems] = useState<string[]>([]);
+  const [showSimilar, setShowSimilar] = useState(false);
 
   useEffect(() => {
     loadRecipes();
@@ -105,6 +112,70 @@ export default function Home() {
     }
   };
 
+  const normalizeText = (text: string) =>
+    text
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+
+  const filteredRecipes = searchQuery.trim()
+    ? recipes.filter((recipe) =>
+        recipe.ingredientes.some((ing) =>
+          normalizeText(ing.item).includes(normalizeText(searchQuery.trim()))
+        )
+      )
+    : recipes;
+
+  const pantrySuggestions = Array.from(
+    new Set(
+      recipes.flatMap((r) =>
+        r.ingredientes.map((ing) => normalizeText(ing.item))
+      )
+    )
+  )
+    .filter((ing) => ing.includes(normalizeText(pantryInput.trim())) && pantryInput.trim())
+    .slice(0, 6);
+
+  const filteredByPantry = pantryItems.length
+    ? recipes
+        .map((recipe) => {
+          const normalizedIngredients = recipe.ingredientes.map((ing) =>
+            normalizeText(ing.item)
+          );
+          const matches = pantryItems.filter((item) =>
+            normalizedIngredients.some((ing) => ing.includes(item))
+          ).length;
+          const matchAll = matches === pantryItems.length;
+          return { recipe, matches, matchAll };
+        })
+        .filter((entry) =>
+          showSimilar ? entry.matches > 0 : entry.matchAll
+        )
+        .sort((a, b) => {
+          if (b.matches !== a.matches) return b.matches - a.matches;
+          if (a.recipe.ingredientes.length !== b.recipe.ingredientes.length) {
+            return a.recipe.ingredientes.length - b.recipe.ingredientes.length;
+          }
+          return (
+            new Date(b.recipe.createdAt).getTime() -
+            new Date(a.recipe.createdAt).getTime()
+          );
+        })
+        .map((entry) => entry.recipe)
+    : [];
+
+  const addPantryItem = (value: string) => {
+    const normalized = normalizeText(value.trim());
+    if (!normalized) return;
+    if (pantryItems.includes(normalized)) return;
+    setPantryItems((prev) => [...prev, normalized]);
+    setPantryInput("");
+  };
+
+  const removePantryItem = (value: string) => {
+    setPantryItems((prev) => prev.filter((item) => item !== value));
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-white to-emerald-50">
       {/* Header */}
@@ -145,6 +216,27 @@ export default function Home() {
         {/* Input de vídeo */}
         <VideoInput onProcess={handleProcessVideo} isProcessing={isProcessing} />
 
+        {/* Busca por ingrediente */}
+        {recipes.length > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <h2 className="text-2xl font-semibold text-gray-800">
+              Suas Receitas (
+              {filteredRecipes.length}
+              {filteredRecipes.length !== recipes.length ? ` de ${recipes.length}` : ""})
+            </h2>
+            <div className="relative w-full sm:w-96">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                type="search"
+                placeholder="Buscar por ingrediente (ex: frango)"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 py-2 rounded-xl border-2 border-amber-200 focus:border-amber-400 focus:ring-2 focus:ring-amber-300"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Card de progresso */}
         <AnimatePresence>
           {isProcessing && (
@@ -156,20 +248,150 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* Grid de receitas */}
+        {/* Despensa */}
         {recipes.length > 0 && (
+          <section className="bg-white/70 border border-amber-200 rounded-2xl p-6 space-y-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-xl font-semibold text-gray-800">Modo Despensa</h3>
+                <p className="text-sm text-gray-500">Informe os ingredientes que você tem para ver receitas que usem todos eles.</p>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-gray-600">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showSimilar}
+                    onChange={(e) => setShowSimilar(e.target.checked)}
+                    className="h-4 w-4 text-amber-500 rounded border-gray-300"
+                  />
+                  Ver semelhantes (contém pelo menos 1)
+                </label>
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="flex-1 relative">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Digite um ingrediente e pressione Enter (ex: limão)"
+                    value={pantryInput}
+                    onChange={(e) => setPantryInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addPantryItem(pantryInput);
+                      }
+                    }}
+                    className="rounded-xl border-2 border-amber-200 focus:border-amber-400 focus:ring-amber-300"
+                  />
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl"
+                    onClick={() => addPantryItem(pantryInput)}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {pantrySuggestions.length > 0 && (
+                  <div className="absolute z-10 mt-2 w-full bg-white border border-amber-200 rounded-xl shadow-lg p-2 space-y-1">
+                    {pantrySuggestions.map((sug) => (
+                      <button
+                        key={sug}
+                        className="w-full text-left px-3 py-2 rounded-lg hover:bg-amber-50 text-sm text-gray-700"
+                        onClick={() => addPantryItem(sug)}
+                      >
+                        {sug}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {pantryItems.length > 0 && (
+                <Button
+                  variant="ghost"
+                  className="text-sm text-amber-700 hover:text-amber-900"
+                  onClick={() => setPantryItems([])}
+                >
+                  Limpar tudo
+                </Button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {pantryItems.map((item) => (
+                <Badge
+                  key={item}
+                  variant="secondary"
+                  className="bg-amber-100 text-amber-800 px-3 py-2 rounded-full flex items-center gap-2"
+                >
+                  {item}
+                  <button
+                    type="button"
+                    onClick={() => removePantryItem(item)}
+                    className="hover:text-amber-900"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+
+            {pantryItems.length > 0 && (
+              <div className="space-y-3">
+                <div className="text-sm text-gray-600">
+                  {filteredByPantry.length} receita(s) encontradas
+                  {showSimilar ? " (similaridade)" : " (todos os ingredientes selecionados)"}
+                </div>
+                {filteredByPantry.length === 0 && (
+                  <p className="text-sm text-gray-500">
+                    Nenhuma receita atende esses ingredientes. Experimente remover um item ou ativar "ver semelhantes".
+                  </p>
+                )}
+                {filteredByPantry.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <AnimatePresence mode="popLayout">
+                      {filteredByPantry.map((recipe) => (
+                        <RecipeCard key={recipe.id} recipe={recipe} />
+                      ))}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Grid de receitas (só quando não está usando o Modo Despensa) */}
+        {recipes.length > 0 && pantryItems.length === 0 && filteredRecipes.length > 0 && (
           <div>
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">
-              Suas Receitas ({recipes.length})
-            </h2>
+            <div className="mb-6" />
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <AnimatePresence mode="popLayout">
-                {recipes.map((recipe) => (
+                {filteredRecipes.map((recipe) => (
                   <RecipeCard key={recipe.id} recipe={recipe} />
                 ))}
               </AnimatePresence>
             </div>
           </div>
+        )}
+
+        {/* Sem resultados na busca */}
+        {recipes.length > 0 && pantryItems.length === 0 && filteredRecipes.length === 0 && searchQuery.trim() && !isProcessing && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center py-12 bg-white/60 rounded-2xl border border-amber-200"
+          >
+            <ChefHat className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-700 mb-2">
+              Nenhuma receita com esse ingrediente
+            </h3>
+            <p className="text-gray-500">
+              Tente outro termo ou remova a busca para ver todas as receitas.
+            </p>
+          </motion.div>
         )}
 
         {/* Empty state */}
@@ -212,4 +434,3 @@ export default function Home() {
     </div>
   );
 }
-

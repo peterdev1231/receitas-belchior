@@ -9,6 +9,9 @@ export class RecipesDB extends Dexie {
     this.version(1).stores({
       recipes: 'id, titulo, createdAt, videoUrl',
     });
+    this.version(2).stores({
+      recipes: 'id, titulo, createdAt, videoUrl, imageUrl',
+    });
   }
 }
 
@@ -62,4 +65,3 @@ export const localStorageBackup = {
     }
   },
 };
-

@@ -1,8 +1,16 @@
 // Biblioteca para baixar vídeos de diferentes plataformas
 import { VideoMetadata } from '@/types/recipe';
 
+type DownloadResult = {
+  audioUrl?: string;
+  audioPath?: string;
+  cleanup: () => Promise<void>;
+  thumbnailUrl?: string;
+  thumbnailSource?: string;
+};
+
 // Extrair metadados do vídeo (descrição, título, etc)
-async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> {
+export async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> {
   try {
     console.log('[BelchiorReceitas] Extraindo metadados do vídeo...');
     const { default: YTDlpWrap } = await import('yt-dlp-wrap');
@@ -18,7 +26,18 @@ async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> 
     
     const metadata = JSON.parse(metadataJson);
     
-    const result = {
+    const thumbnailsArray: string[] = Array.isArray(metadata.thumbnails)
+      ? metadata.thumbnails
+          .map((t: any) => t?.url)
+          .filter((u: string | undefined): u is string => !!u)
+      : [];
+
+    const bestThumbnail =
+      thumbnailsArray.length > 0
+        ? thumbnailsArray[thumbnailsArray.length - 1] // yt-dlp usually orders smallest->largest
+        : metadata.thumbnail || '';
+
+    const result: VideoMetadata = {
       title: metadata.title || metadata.fulltitle || '',
       description: metadata.description || '',
       hashtags: metadata.tags || [],
@@ -26,6 +45,8 @@ async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> 
       platform: url.includes('youtube') || url.includes('youtu.be') ? 'youtube' as const :
                 url.includes('tiktok') ? 'tiktok' as const :
                 url.includes('instagram') ? 'instagram' as const : undefined,
+      thumbnailUrl: bestThumbnail || undefined,
+      thumbnails: thumbnailsArray,
     };
     
     console.log('[BelchiorReceitas] ✅ Metadados extraídos:', {
@@ -41,12 +62,7 @@ async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> 
   }
 }
 
-export async function downloadVideoViaAPI(url: string): Promise<{
-  audioUrl?: string;
-  audioPath?: string;
-  metadata: VideoMetadata | null;
-  cleanup: () => Promise<void>
-}> {
+export async function downloadVideoViaAPI(url: string): Promise<DownloadResult & { metadata: VideoMetadata | null }> {
   const { join } = await import('path');
   const { tmpdir } = await import('os');
 
@@ -57,6 +73,12 @@ export async function downloadVideoViaAPI(url: string): Promise<{
 
   // PASSO 1: Extrair metadados (descrição, título)
   const metadata = await extractVideoMetadata(url);
+  let thumbnailUrl = metadata?.thumbnailUrl;
+  let thumbnailSource = metadata?.thumbnailUrl
+    ? (metadata?.platform === 'tiktok' ? 'tiktok-cover'
+      : metadata?.platform === 'instagram' ? 'ig-thumb'
+      : 'yt-thumb')
+    : undefined;
 
   // Detectar plataforma
   const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok') || url.includes('vt.tiktok');
@@ -64,7 +86,7 @@ export async function downloadVideoViaAPI(url: string): Promise<{
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
 
   // PASSO 2: Baixar áudio
-  let result;
+  let result: DownloadResult;
   if (isYouTube) {
     // YouTube usa yt-dlp (com arquivo local)
     result = await downloadWithYtDlp(url, audioPath);
@@ -79,15 +101,21 @@ export async function downloadVideoViaAPI(url: string): Promise<{
     result = await downloadWithYtDlp(url, audioPath);
   }
 
+  // Consolidar thumbnail se veio do download específico
+  thumbnailUrl = result.thumbnailUrl || thumbnailUrl;
+  thumbnailSource = result.thumbnailSource || thumbnailSource;
+
   // Retornar áudio + metadados
   return {
     ...result,
+    thumbnailUrl,
+    thumbnailSource,
     metadata,
   };
 }
 
 // Download com yt-dlp (YouTube)
-async function downloadWithYtDlp(url: string, audioPath: string): Promise<{ audioPath: string; cleanup: () => Promise<void> }> {
+async function downloadWithYtDlp(url: string, audioPath: string): Promise<DownloadResult> {
   const { default: YTDlpWrap } = await import('yt-dlp-wrap');
   
   console.log('[BelchiorReceitas] Usando yt-dlp para YouTube...');
@@ -127,7 +155,7 @@ async function downloadWithYtDlp(url: string, audioPath: string): Promise<{ audi
 }
 
 // Download TikTok via API - Retorna URL do vídeo (sem arquivo local)
-async function downloadTikTokViaAPI(url: string): Promise<{ audioUrl: string; cleanup: () => Promise<void> }> {
+async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
   console.log('[BelchiorReceitas] Obtendo URL do vídeo TikTok via API...');
 
   // Usar APIs para obter URL do vídeo
@@ -151,7 +179,10 @@ async function downloadTikTokViaAPI(url: string): Promise<{ audioUrl: string; cl
         const videoUrl = data.data.play || data.data.wmplay || data.data.hdplay;
         if (videoUrl) {
           console.log('[BelchiorReceitas] ✅ TikWM: URL do vídeo obtida');
-          return videoUrl;
+          return {
+            videoUrl,
+            thumbnailUrl: data.data.cover || data.data.origin_cover,
+          };
         }
       }
       throw new Error('TikWM não retornou vídeo');
@@ -170,21 +201,25 @@ async function downloadTikTokViaAPI(url: string): Promise<{ audioUrl: string; cl
       const data = await response.json();
 
       // Tentar extrair URL do vídeo da resposta
-      const videoUrl = data?.aweme_list?.[0]?.video?.play_addr?.url_list?.[0];
+      const videoData = data?.aweme_list?.[0]?.video;
+      const videoUrl = videoData?.play_addr?.url_list?.[0];
+      const cover = videoData?.cover?.url_list?.[0] || videoData?.origin_cover?.url_list?.[0];
       if (videoUrl) {
         console.log('[BelchiorReceitas] ✅ TikTokDownloader: URL obtida');
-        return videoUrl;
+        return { videoUrl, thumbnailUrl: cover };
       }
       throw new Error('URL não encontrada na resposta');
     }
   ];
 
   let videoUrl: string | null = null;
+  let thumbnailUrl: string | undefined;
   for (const apiCall of apis) {
     try {
       const result = await apiCall();
       if (result) {
-        videoUrl = result;
+        videoUrl = typeof result === 'string' ? result : result.videoUrl;
+        thumbnailUrl = typeof result === 'string' ? undefined : result.thumbnailUrl;
         break;
       }
     } catch (error: any) {
@@ -200,6 +235,8 @@ async function downloadTikTokViaAPI(url: string): Promise<{ audioUrl: string; cl
   console.log('[BelchiorReceitas] ✅ URL do vídeo TikTok pronta para transcrição');
   return {
     audioUrl: videoUrl,
+    thumbnailUrl,
+    thumbnailSource: thumbnailUrl ? 'tiktok-cover' : undefined,
     cleanup: async () => {
       // Sem arquivo local, nada para limpar
       console.log('[BelchiorReceitas] Cleanup: nenhum arquivo para remover');
@@ -208,7 +245,7 @@ async function downloadTikTokViaAPI(url: string): Promise<{ audioUrl: string; cl
 }
 
 // Download Instagram via API - Retorna URL do vídeo (sem arquivo local)
-async function downloadInstagramViaAPI(url: string): Promise<{ audioUrl: string; cleanup: () => Promise<void> }> {
+async function downloadInstagramViaAPI(url: string): Promise<DownloadResult> {
   console.log('[BelchiorReceitas] Obtendo URL do vídeo Instagram via API...');
 
   // Tentar múltiplas APIs para Instagram
@@ -230,7 +267,10 @@ async function downloadInstagramViaAPI(url: string): Promise<{ audioUrl: string;
       const data = await response.json();
       if (data && data.success && data.download_url) {
         console.log('[BelchiorReceitas] ✅ DDInstagram: URL obtida');
-        return data.download_url;
+        return {
+          videoUrl: data.download_url,
+          thumbnailUrl: data.preview || data.thumbnail || data.thumbnail_url,
+        };
       }
       throw new Error('DDInstagram não retornou URL válida');
     },
@@ -250,19 +290,24 @@ async function downloadInstagramViaAPI(url: string): Promise<{ audioUrl: string;
       const data = await response.json();
       if (data && data.video_url) {
         console.log('[BelchiorReceitas] ✅ Insta.save: URL obtida');
-        return data.video_url;
+        return {
+          videoUrl: data.video_url,
+          thumbnailUrl: data.thumbnail || data.thumb || data.preview || data.thumbnail_url,
+        };
       }
       throw new Error('Insta.save não retornou URL válida');
     }
   ];
 
   let videoUrl: string | null = null;
+  let thumbnailUrl: string | undefined;
 
   for (const apiCall of apis) {
     try {
       const result = await apiCall();
       if (result) {
-        videoUrl = result;
+        videoUrl = typeof result === 'string' ? result : result.videoUrl;
+        thumbnailUrl = typeof result === 'string' ? undefined : result.thumbnailUrl;
         break;
       }
     } catch (error: any) {
@@ -278,10 +323,11 @@ async function downloadInstagramViaAPI(url: string): Promise<{ audioUrl: string;
   console.log('[BelchiorReceitas] ✅ URL do vídeo Instagram pronta para transcrição');
   return {
     audioUrl: videoUrl,
+    thumbnailUrl,
+    thumbnailSource: thumbnailUrl ? 'ig-thumb' : undefined,
     cleanup: async () => {
       // Sem arquivo local, nada para limpar
       console.log('[BelchiorReceitas] Cleanup: nenhum arquivo para remover');
     }
   };
 }
-
