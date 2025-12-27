@@ -5,6 +5,39 @@ import { generateId } from '@/lib/utils';
 export const maxDuration = 300; // 5 minutos
 export const dynamic = 'force-dynamic';
 
+const normalizeContentType = (value: string | null): string => {
+  return value ? value.split(';')[0].trim() : 'audio/mpeg';
+};
+
+const inferFileName = (url: string, contentType: string): string => {
+  const typeToExt: Record<string, string> = {
+    'audio/mpeg': 'mp3',
+    'audio/mp4': 'm4a',
+    'audio/aac': 'aac',
+    'audio/ogg': 'ogg',
+    'audio/webm': 'webm',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  };
+
+  let ext = typeToExt[contentType];
+
+  if (!ext) {
+    try {
+      const pathname = new URL(url).pathname;
+      const rawExt = pathname.split('.').pop();
+      if (rawExt && rawExt.length <= 5) {
+        ext = rawExt;
+      }
+    } catch {
+      // Ignore URL parsing issues.
+    }
+  }
+
+  const base = contentType.startsWith('video/') ? 'video' : 'audio';
+  return `${base}.${ext || 'mp3'}`;
+};
+
 export async function POST(request: NextRequest) {
   console.log('[BelchiorReceitas] Iniciando processamento de vídeo');
   
@@ -111,11 +144,19 @@ export async function POST(request: NextRequest) {
         if (!audioResponse.ok) {
           throw new Error(`Falha ao download da URL de áudio: ${audioResponse.status}`);
         }
+        const contentType = normalizeContentType(audioResponse.headers.get('content-type'));
+        const contentLength = audioResponse.headers.get('content-length');
+        const fileName = inferFileName(audioUrl, contentType);
+        console.log('[BelchiorReceitas] Mídia remota:', {
+          contentType,
+          contentLength,
+          fileName,
+        });
+
         const audioBuffer = await audioResponse.arrayBuffer();
 
         // Criar um objeto File-like para o Whisper
-        const audioBlob = new Blob([audioBuffer], { type: 'audio/mpeg' });
-        const audioFile = new File([audioBlob], 'audio.mp3', { type: 'audio/mpeg' });
+        const audioFile = new File([audioBuffer], fileName, { type: contentType });
 
         response = await openai.audio.transcriptions.create({
           file: audioFile as any,
@@ -146,7 +187,13 @@ export async function POST(request: NextRequest) {
         preview: transcricao.substring(0, 100) + '...'
       });
     } catch (error: any) {
-      console.error('[BelchiorReceitas] Erro na transcrição:', error?.message || error);
+      console.error('[BelchiorReceitas] Erro na transcrição:', {
+        message: error?.message || error,
+        status: error?.status,
+        code: error?.code,
+        type: error?.type,
+        cause: error?.cause?.message || error?.cause,
+      });
       await cleanup();
       return NextResponse.json(
         { success: false, error: `Erro ao transcrever áudio: ${error?.message || 'Erro desconhecido'}` },

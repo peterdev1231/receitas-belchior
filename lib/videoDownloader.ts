@@ -218,11 +218,20 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
       console.log('[BelchiorReceitas] TikWM response:', data.code);
 
       if (data.code === 0 && data.data) {
+        const audioUrl =
+          data.data.music ||
+          data.data.music_url ||
+          data.data.music_info?.play ||
+          data.data.music_info?.play_url?.[0] ||
+          data.data.music_info?.playUrl;
         const videoUrl = data.data.play || data.data.wmplay || data.data.hdplay;
-        if (videoUrl) {
-          console.log('[BelchiorReceitas] ✅ TikWM: URL do vídeo obtida');
+        const mediaUrl = audioUrl || videoUrl;
+        if (mediaUrl) {
+          console.log(
+            `[BelchiorReceitas] ✅ TikWM: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
+          );
           return {
-            videoUrl,
+            videoUrl: mediaUrl,
             thumbnailUrl: data.data.cover || data.data.origin_cover,
           };
         }
@@ -245,10 +254,14 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
       // Tentar extrair URL do vídeo da resposta
       const videoData = data?.aweme_list?.[0]?.video;
       const videoUrl = videoData?.play_addr?.url_list?.[0];
+      const audioUrl = data?.aweme_list?.[0]?.music?.play_url?.url_list?.[0];
       const cover = videoData?.cover?.url_list?.[0] || videoData?.origin_cover?.url_list?.[0];
-      if (videoUrl) {
-        console.log('[BelchiorReceitas] ✅ TikTokDownloader: URL obtida');
-        return { videoUrl, thumbnailUrl: cover };
+      const mediaUrl = audioUrl || videoUrl;
+      if (mediaUrl) {
+        console.log(
+          `[BelchiorReceitas] ✅ TikTokDownloader: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
+        );
+        return { videoUrl: mediaUrl, thumbnailUrl: cover };
       }
       throw new Error('URL não encontrada na resposta');
     }
