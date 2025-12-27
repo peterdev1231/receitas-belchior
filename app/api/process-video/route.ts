@@ -9,6 +9,7 @@ export const runtime = 'nodejs';
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set(['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm']);
 const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+const GEMINI_RESPONSE_MIME = 'application/json';
 
 const AUDIO_MIME_BY_EXT: Record<string, string> = {
   mp3: 'audio/mpeg',
@@ -38,6 +39,25 @@ const inferMimeTypeFromPath = (filePath: string, fallback?: string): string => {
 
 const getGeminiModelName = (envKey: string): string => {
   return process.env[envKey] || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+};
+
+const parseJsonResponse = <T>(raw: string): T => {
+  const cleaned = raw
+    .replace(/```json\n?/gi, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      const slice = cleaned.slice(firstBrace, lastBrace + 1);
+      return JSON.parse(slice) as T;
+    }
+    throw new Error('Resposta inválida da IA');
+  }
 };
 
 const inferFileName = (url: string, contentType: string): string => {
@@ -244,12 +264,14 @@ const geminiGenerateText = async ({
   prompt,
   temperature = 0.3,
   maxOutputTokens,
+  responseSchema,
 }: {
   modelName: string;
   systemInstruction?: string;
   prompt: string;
   temperature?: number;
   maxOutputTokens?: number;
+  responseSchema?: any;
 }): Promise<string> => {
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const apiKey = process.env.GEMINI_API_KEY;
@@ -263,13 +285,20 @@ const geminiGenerateText = async ({
     ...(systemInstruction ? { systemInstruction } : {}),
   });
 
+  const generationConfig: Record<string, any> = {
+    temperature,
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
+  };
+
+  if (responseSchema) {
+    generationConfig.responseMimeType = GEMINI_RESPONSE_MIME;
+    generationConfig.responseSchema = responseSchema;
+  }
+
   const result = await runGeminiWithRetry(() =>
     model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature,
-        ...(maxOutputTokens ? { maxOutputTokens } : {}),
-      },
+      generationConfig,
     })
   );
 
@@ -278,6 +307,45 @@ const geminiGenerateText = async ({
     throw new Error('Resposta vazia do Gemini');
   }
   return text.trim();
+};
+
+let cachedRecipeSchema: any | null = null;
+
+const getRecipeResponseSchema = async () => {
+  if (cachedRecipeSchema) return cachedRecipeSchema;
+  const { SchemaType } = await import('@google/generative-ai');
+  cachedRecipeSchema = {
+    type: SchemaType.OBJECT,
+    properties: {
+      titulo: { type: SchemaType.STRING },
+      ingredientes: {
+        type: SchemaType.ARRAY,
+        items: {
+          type: SchemaType.OBJECT,
+          properties: {
+            item: { type: SchemaType.STRING },
+            categoria: { type: SchemaType.STRING },
+          },
+          required: ['item'],
+        },
+      },
+      modo_preparo: {
+        type: SchemaType.ARRAY,
+        items: {
+          type: SchemaType.OBJECT,
+          properties: {
+            passo: { type: SchemaType.INTEGER },
+            instrucao: { type: SchemaType.STRING },
+          },
+          required: ['passo', 'instrucao'],
+        },
+      },
+      tempo_preparo: { type: SchemaType.STRING },
+      rendimento: { type: SchemaType.STRING },
+    },
+    required: ['titulo', 'ingredientes', 'modo_preparo', 'tempo_preparo', 'rendimento'],
+  };
+  return cachedRecipeSchema;
 };
 
 const geminiTranscribeAudio = async ({
@@ -777,6 +845,7 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
           prompt: promptCompleto,
           temperature: 0.3,
           maxOutputTokens: 2000,
+          responseSchema: await getRecipeResponseSchema(),
         });
       } else {
         const completion = await openai.chat.completions.create({
@@ -799,11 +868,8 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
       
       console.log('[BelchiorReceitas] Resposta da IA:', receitaText);
       
-      // Remover markdown se existir
-      receitaText = receitaText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      
       // Parse do JSON
-      const receitaData = JSON.parse(receitaText);
+      const receitaData = parseJsonResponse<any>(receitaText);
       
       const recipe: Recipe = {
         id: generateId(),

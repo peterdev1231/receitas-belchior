@@ -18,6 +18,73 @@ interface AIAnalysis {
   insights: string[];
 }
 
+const parseJsonResponse = <T>(raw: string): T => {
+  const cleaned = raw
+    .replace(/```json\n?/gi, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      const slice = cleaned.slice(firstBrace, lastBrace + 1);
+      return JSON.parse(slice) as T;
+    }
+    throw new Error('Resposta inválida da IA');
+  }
+};
+
+let cachedAnalysisSchema: any | null = null;
+
+const getAnalysisSchema = async () => {
+  if (cachedAnalysisSchema) return cachedAnalysisSchema;
+  const { SchemaType } = await import('@google/generative-ai');
+  cachedAnalysisSchema = {
+    type: SchemaType.OBJECT,
+    properties: {
+      totalRecipes: { type: SchemaType.INTEGER },
+      mostUsedIngredients: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING },
+      },
+      favoriteCategories: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING },
+      },
+      averageTime: { type: SchemaType.STRING },
+      recommendations: {
+        type: SchemaType.ARRAY,
+        items: {
+          type: SchemaType.OBJECT,
+          properties: {
+            recipeIndex: { type: SchemaType.INTEGER },
+            reason: { type: SchemaType.STRING },
+            similarity: { type: SchemaType.NUMBER },
+            category: { type: SchemaType.STRING },
+          },
+          required: ['recipeIndex', 'reason', 'similarity', 'category'],
+        },
+      },
+      insights: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING },
+      },
+    },
+    required: [
+      'totalRecipes',
+      'mostUsedIngredients',
+      'favoriteCategories',
+      'averageTime',
+      'recommendations',
+      'insights',
+    ],
+  };
+  return cachedAnalysisSchema;
+};
+
 export async function POST(request: NextRequest) {
   try {
     const { recipes }: { recipes: Recipe[] } = await request.json();
@@ -134,7 +201,12 @@ IMPORTANTE:
 
       const result = await model.generateContent({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 2000 },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 2000,
+          responseMimeType: 'application/json',
+          responseSchema: await getAnalysisSchema(),
+        },
       });
 
       responseText = result.response?.text?.();
@@ -172,7 +244,7 @@ IMPORTANTE:
     // Parsear resposta JSON
     let analysis: AIAnalysis;
     try {
-      analysis = JSON.parse(cleanedResponse);
+      analysis = parseJsonResponse<AIAnalysis>(cleanedResponse);
     } catch (parseError) {
       console.error('[BelchiorReceitas] Erro ao parsear resposta da IA:', parseError);
       console.error('[BelchiorReceitas] Resposta recebida:', cleanedResponse.substring(0, 500));
