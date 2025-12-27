@@ -54,16 +54,36 @@ const shouldTranscode = (contentType: string, contentLength?: number, force?: bo
   return false;
 };
 
-const streamResponseToFile = async (body: ReadableStream<Uint8Array> | null, filePath: string) => {
-  if (!body) throw new Error('Resposta sem corpo para download');
+const streamResponseToFile = async (response: any, filePath: string) => {
+  const body = response?.body ?? null;
+  const { writeFile } = await import('node:fs/promises');
+
+  if (!body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(filePath, buffer);
+    return;
+  }
+
   const { createWriteStream } = await import('node:fs');
   const { pipeline } = await import('node:stream/promises');
-  const { Readable } = await import('node:stream');
 
-  let nodeStream: NodeJS.ReadableStream;
+  let Readable: typeof import('node:stream').Readable | undefined;
+  try {
+    ({ Readable } = await import('node:stream'));
+  } catch {
+    Readable = undefined;
+  }
+
+  if (!Readable) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(filePath, buffer);
+    return;
+  }
+
+  let nodeStream: NodeJS.ReadableStream | null = null;
   const readableAny: any = Readable as any;
 
-  if (typeof readableAny.fromWeb === 'function') {
+  if (readableAny && typeof readableAny.fromWeb === 'function') {
     nodeStream = readableAny.fromWeb(body as any);
   } else if (typeof (body as any)[Symbol.asyncIterator] === 'function') {
     nodeStream = Readable.from(body as any);
@@ -80,8 +100,12 @@ const streamResponseToFile = async (body: ReadableStream<Uint8Array> | null, fil
         reader.releaseLock?.();
       }
     })());
-  } else {
-    throw new Error('Stream de resposta não compatível');
+  }
+
+  if (!nodeStream) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await writeFile(filePath, buffer);
+    return;
   }
 
   await pipeline(nodeStream, createWriteStream(filePath));
@@ -296,7 +320,7 @@ export async function POST(request: NextRequest) {
         );
         extraCleanupPaths.push(inputPath);
 
-        await streamResponseToFile(audioResponse.body, inputPath);
+        await streamResponseToFile(audioResponse, inputPath);
 
         const forceTranscode = isTikTokUrl || isInstagramUrl;
         let transcriptionPath = inputPath;
