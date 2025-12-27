@@ -3,7 +3,7 @@
 ## Pré-requisitos
 
 1. Conta na Vercel (https://vercel.com)
-2. Chave da API OpenAI
+2. Chave da API Gemini
 3. Repositório Git (GitHub, GitLab ou Bitbucket)
 
 ## Instalação do yt-dlp
@@ -59,7 +59,8 @@ git push -u origin main
 No painel da Vercel, adicione:
 
 ```
-OPENAI_API_KEY=sk-proj-sua-chave-aqui
+GEMINI_API_KEY=sua-chave-aqui
+# (opcional) OPENAI_API_KEY=sk-proj-sua-chave-aqui
 ```
 
 ### 4. Deploy
@@ -96,9 +97,9 @@ O vídeo é muito longo. Tente:
 - Upgrade para plano Pro da Vercel
 - Use uma solução com backend separado (Railway, Render)
 
-### Erro: "OpenAI API Key is missing"
+### Erro: "GEMINI_API_KEY is missing"
 
-Configure a variável `OPENAI_API_KEY` nas configurações da Vercel.
+Configure a variável `GEMINI_API_KEY` nas configurações da Vercel.
 
 ## Monitoramento
 
@@ -112,4 +113,3 @@ Se encontrar limitações, considere:
 - **Railway:** https://railway.app (serverless com timeouts maiores)
 - **Render:** https://render.com (container-based)
 - **Fly.io:** https://fly.io (VMs persistentes)
-

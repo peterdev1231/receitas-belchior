@@ -8,6 +8,18 @@ export const runtime = 'nodejs';
 
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 const SUPPORTED_EXTENSIONS = new Set(['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm']);
+const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  mp4: 'audio/mp4',
+  m4a: 'audio/mp4',
+  mpeg: 'audio/mpeg',
+  mpga: 'audio/mpeg',
+  wav: 'audio/wav',
+  webm: 'audio/webm',
+  ogg: 'audio/ogg',
+};
 
 const normalizeContentType = (value: string | null): string => {
   return value ? value.split(';')[0].trim() : 'application/octet-stream';
@@ -17,6 +29,15 @@ const parseContentLength = (value: string | null): number | undefined => {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const inferMimeTypeFromPath = (filePath: string, fallback?: string): string => {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  return AUDIO_MIME_BY_EXT[ext] || fallback || 'audio/mpeg';
+};
+
+const getGeminiModelName = (envKey: string): string => {
+  return process.env[envKey] || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
 };
 
 const inferFileName = (url: string, contentType: string): string => {
@@ -185,6 +206,128 @@ const transcribeWithRetry = async (
   throw lastError;
 };
 
+const isRetryableGeminiError = (error: any): boolean => {
+  const message = String(error?.message || '');
+  return (
+    message.includes('429') ||
+    message.includes('RESOURCE_EXHAUSTED') ||
+    message.includes('503') ||
+    message.includes('502') ||
+    message.includes('504') ||
+    message.includes('ECONNRESET') ||
+    message.includes('ETIMEDOUT')
+  );
+};
+
+const runGeminiWithRetry = async <T>(fn: () => Promise<T>, attempts = 2): Promise<T> => {
+  let lastError: any;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        console.log(`[BelchiorReceitas] 🔁 Retry Gemini ${attempt}/${attempts}`);
+      }
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      if (!isRetryableGeminiError(error) || attempt === attempts) {
+        throw error;
+      }
+      await sleep(400 * attempt * attempt);
+    }
+  }
+  throw lastError;
+};
+
+const geminiGenerateText = async ({
+  modelName,
+  systemInstruction,
+  prompt,
+  temperature = 0.3,
+  maxOutputTokens,
+}: {
+  modelName: string;
+  systemInstruction?: string;
+  prompt: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}): Promise<string> => {
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY não configurada');
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    ...(systemInstruction ? { systemInstruction } : {}),
+  });
+
+  const result = await runGeminiWithRetry(() =>
+    model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature,
+        ...(maxOutputTokens ? { maxOutputTokens } : {}),
+      },
+    })
+  );
+
+  const text = result.response?.text?.();
+  if (!text) {
+    throw new Error('Resposta vazia do Gemini');
+  }
+  return text.trim();
+};
+
+const geminiTranscribeAudio = async ({
+  modelName,
+  audioPath,
+  mimeType,
+}: {
+  modelName: string;
+  audioPath: string;
+  mimeType: string;
+}): Promise<string> => {
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const { readFile } = await import('node:fs/promises');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY não configurada');
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction:
+      'Você é um assistente de transcrição. Retorne apenas o texto transcrito, sem comentários e sem formatação.',
+  });
+
+  const audioBase64 = (await readFile(audioPath)).toString('base64');
+  const result = await runGeminiWithRetry(() =>
+    model.generateContent({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: 'Transcreva o áudio a seguir e retorne somente o texto.' },
+            { inlineData: { mimeType, data: audioBase64 } },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0,
+      },
+    })
+  );
+
+  const text = result.response?.text?.();
+  if (!text) {
+    throw new Error('Transcrição vazia do Gemini');
+  }
+  return text.trim();
+};
+
 export async function POST(request: NextRequest) {
   console.log('[BelchiorReceitas] Iniciando processamento de vídeo');
   
@@ -216,22 +359,30 @@ export async function POST(request: NextRequest) {
     console.log('[BelchiorReceitas] URL recebida:', videoUrl);
     
     // Importações dinâmicas para evitar erros no build
-    const { default: OpenAI } = await import('openai');
     const { createReadStream } = await import('fs');
     const { downloadVideoViaAPI } = await import('@/lib/videoDownloader');
-    
-    // Instanciar OpenAI
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-    
-    if (!process.env.OPENAI_API_KEY) {
-      console.error('[BelchiorReceitas] OPENAI_API_KEY não configurada');
+
+    const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+    const useGemini = hasGeminiKey;
+
+    if (!hasGeminiKey && !hasOpenAIKey) {
+      console.error('[BelchiorReceitas] Nenhuma API key configurada');
       return NextResponse.json(
-        { success: false, error: 'Configuração da API OpenAI está faltando' },
+        { success: false, error: 'Configuração de API (Gemini ou OpenAI) está faltando' },
         { status: 500 }
       );
     }
+
+    let openai: any = null;
+    if (!useGemini) {
+      const { default: OpenAI } = await import('openai');
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    }
+
+    console.log('[BelchiorReceitas] Provider IA:', useGemini ? 'gemini' : 'openai');
     
     // 1. Download do áudio e extração de metadados
     console.log('[BelchiorReceitas] Baixando áudio e extraindo metadados...');
@@ -286,8 +437,6 @@ export async function POST(request: NextRequest) {
     let idiomaDetectado = 'pt'; // padrão português
 
     try {
-      let response;
-
       // Se tem audioUrl, fazer fetch e enviar como Buffer
       if (audioUrl) {
         console.log('[BelchiorReceitas] Fazendo download da URL e enviando para Whisper...');
@@ -355,7 +504,17 @@ export async function POST(request: NextRequest) {
           transcoded,
         });
 
-        response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
+        if (useGemini) {
+          const mimeType = inferMimeTypeFromPath(transcriptionPath, contentType);
+          transcricao = await geminiTranscribeAudio({
+            modelName: getGeminiModelName('GEMINI_TRANSCRIBE_MODEL'),
+            audioPath: transcriptionPath,
+            mimeType,
+          });
+        } else {
+          const response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
+          transcricao = response.text;
+        }
       } else if (audioPath) {
         // Se tem audioPath, usar createReadStream
         console.log('[BelchiorReceitas] Enviando arquivo local para Whisper...');
@@ -385,12 +544,20 @@ export async function POST(request: NextRequest) {
           transcoded,
         });
 
-        response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
+        if (useGemini) {
+          const mimeType = inferMimeTypeFromPath(transcriptionPath);
+          transcricao = await geminiTranscribeAudio({
+            modelName: getGeminiModelName('GEMINI_TRANSCRIBE_MODEL'),
+            audioPath: transcriptionPath,
+            mimeType,
+          });
+        } else {
+          const response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
+          transcricao = response.text;
+        }
       } else {
         throw new Error('Nenhuma fonte de áudio disponível');
       }
-
-      transcricao = response.text;
       
       // Whisper detecta automaticamente o idioma
       // Vamos inferir baseado na transcrição ou usar metadata
@@ -602,22 +769,34 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
     };
     
     try {
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: getSystemPrompt(idiomaDetectado),
-          },
-          {
-            role: 'user',
-            content: promptCompleto,
-          },
-        ],
-        temperature: 0.3,
-      });
+      let receitaText = '';
+      if (useGemini) {
+        receitaText = await geminiGenerateText({
+          modelName: getGeminiModelName('GEMINI_RECIPE_MODEL'),
+          systemInstruction: getSystemPrompt(idiomaDetectado),
+          prompt: promptCompleto,
+          temperature: 0.3,
+          maxOutputTokens: 2000,
+        });
+      } else {
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: getSystemPrompt(idiomaDetectado),
+            },
+            {
+              role: 'user',
+              content: promptCompleto,
+            },
+          ],
+          temperature: 0.3,
+        });
+        
+        receitaText = completion.choices[0].message.content || '{}';
+      }
       
-      let receitaText = completion.choices[0].message.content || '{}';
       console.log('[BelchiorReceitas] Resposta da IA:', receitaText);
       
       // Remover markdown se existir
@@ -680,5 +859,6 @@ export async function GET() {
     status: 'ok',
     message: 'Belchior Receitas API está funcionando',
     hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+    hasGeminiKey: !!process.env.GEMINI_API_KEY,
   });
 }

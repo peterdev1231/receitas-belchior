@@ -49,20 +49,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Verificar se a API key está disponível
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
+    const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+    const useGemini = hasGeminiKey;
+
+    if (!hasGeminiKey && !hasOpenAIKey) {
       return NextResponse.json(
-        { error: 'OpenAI API key não configurada' },
+        { error: 'GEMINI_API_KEY ou OPENAI_API_KEY não configurada' },
         { status: 500 }
       );
     }
 
-    // Importar OpenAI dinamicamente
-    const { default: OpenAI } = await import('openai');
-    const openai = new OpenAI({
-      apiKey: apiKey,
-    });
+    let openai: any = null;
+    if (!useGemini) {
+      const { default: OpenAI } = await import('openai');
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    }
 
     // Preparar dados das receitas para análise
     const recipesData = recipes.map(recipe => ({
@@ -117,23 +121,42 @@ IMPORTANTE:
 - RETORNE APENAS O JSON PURO, SEM MARKDOWN`;
 
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: 'Você é um chef especialista em análise culinária e recomendações personalizadas. Analise padrões em receitas e forneça insights valiosos de forma criativa e útil.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-    });
+    let responseText: string | undefined;
+    if (useGemini) {
+      const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+      const modelName = process.env.GEMINI_RECOMMEND_MODEL || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction:
+          'Você é um chef especialista em análise culinária e recomendações personalizadas. Analise padrões em receitas e forneça insights valiosos de forma criativa e útil.',
+      });
 
-    const responseText = completion.choices[0]?.message?.content;
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 2000 },
+      });
+
+      responseText = result.response?.text?.();
+    } else {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Você é um chef especialista em análise culinária e recomendações personalizadas. Analise padrões em receitas e forneça insights valiosos de forma criativa e útil.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 2000,
+      });
+
+      responseText = completion.choices[0]?.message?.content;
+    }
     if (!responseText) {
       throw new Error('Resposta vazia da OpenAI');
     }

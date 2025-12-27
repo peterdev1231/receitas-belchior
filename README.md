@@ -6,8 +6,8 @@ Aplicação web que transforma vídeos de receitas em receitas estruturadas usan
 
 - **Next.js 14+** com App Router
 - **TailwindCSS** - Design minimalista com tons de cozinha caseira
-- **OpenAI Whisper** - Transcrição de áudio
-- **GPT-5-nano** - Organização inteligente de receitas
+- **Gemini** - Transcrição e organização de receitas
+- **OpenAI** - Fallback opcional
 - **Dexie.js** - Armazenamento local com IndexedDB
 - **Framer Motion** - Animações suaves
 
@@ -28,7 +28,8 @@ npm install
 
 # Configurar variáveis de ambiente
 # Crie um arquivo .env.local com:
-# OPENAI_API_KEY=sua-chave-aqui
+# GEMINI_API_KEY=sua-chave-aqui
+# (opcional) OPENAI_API_KEY=sua-chave-aqui
 
 # Executar em desenvolvimento
 npm run dev
@@ -37,7 +38,7 @@ npm run dev
 ## Deploy na Vercel
 
 1. Conecte seu repositório à Vercel
-2. Configure a variável de ambiente `OPENAI_API_KEY`
+2. Configure a variável de ambiente `GEMINI_API_KEY`
 3. Deploy automático!
 
 ## Estrutura do Projeto
@@ -70,4 +71,3 @@ Todos os logs são prefixados com `[BelchiorReceitas]` para fácil identificaç�
 ## Licença
 
 MIT
-

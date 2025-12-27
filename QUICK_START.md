@@ -50,16 +50,16 @@ Cole uma URL de vídeo de receita (YouTube, TikTok, Instagram) e clique em "Proc
 
 1. Criar repositório no GitHub
 2. Conectar na Vercel
-3. Adicionar variável `OPENAI_API_KEY`
+3. Adicionar variável `GEMINI_API_KEY`
 4. Deploy! 🚀
 
 Veja mais detalhes em `DEPLOYMENT.md`
 
 ## 🔑 API Key
 
-A chave da OpenAI já está configurada no `.env.local`:
-- Modelo de transcrição: **whisper-1**
-- Modelo de organização: **gpt-5-nano** (mais econômico)
+A chave do Gemini já está configurada no `.env.local`:
+- Modelo padrão: **gemini-3-flash-preview**
+- (Opcional) `GEMINI_TRANSCRIBE_MODEL` e `GEMINI_RECIPE_MODEL`
 
 ## 📚 Documentação
 
@@ -74,9 +74,8 @@ Verifique os logs com prefixo `[BelchiorReceitas]` no console do navegador e no 
 ## 🎯 Features
 
 ✅ Processar vídeos do YouTube, TikTok, Instagram  
-✅ Transcrição automática (Whisper)  
-✅ Organização inteligente (GPT-5-nano)  
+✅ Transcrição automática (Gemini)  
+✅ Organização inteligente (Gemini)  
 ✅ Armazenamento local (IndexedDB)  
 ✅ Design responsivo e minimalista  
 ✅ Animações suaves (Framer Motion)  
-

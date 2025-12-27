@@ -51,7 +51,7 @@ npm install
 
 ### 4. Configurar Variáveis de Ambiente
 
-A chave da API OpenAI já está configurada no arquivo `.env.local` (bloqueado pelo .gitignore).
+A chave da API Gemini já está configurada no arquivo `.env.local` (bloqueado pelo .gitignore).
 
 **IMPORTANTE:** Nunca commite a chave da API para o Git!
 
@@ -84,7 +84,7 @@ where yt-dlp  # Windows
 pip3 install --upgrade yt-dlp
 ```
 
-### ❌ Erro: "OpenAI API Key is missing"
+### ❌ Erro: "GEMINI_API_KEY is missing"
 
 **Solução:**
 - Verifique se o arquivo `.env.local` existe na raiz do projeto
@@ -114,7 +114,7 @@ npm install
 ### ❌ Transcrição falha
 
 **Possíveis causas:**
-- Problema com a API OpenAI
+- Problema com a API Gemini
 - Arquivo de áudio muito grande
 - Chave da API inválida
 
@@ -180,4 +180,3 @@ new receitas/
 
 Problemas? Verifique os logs no console do navegador e no terminal.
 Todos os logs têm o prefixo `[BelchiorReceitas]` para fácil identificação.
-
