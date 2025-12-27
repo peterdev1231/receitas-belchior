@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 
 const normalizeContentType = (value: string | null): string => {
-  return value ? value.split(';')[0].trim() : 'audio/mpeg';
+  return value ? value.split(';')[0].trim() : 'application/octet-stream';
 };
 
 const parseContentLength = (value: string | null): number | undefined => {
@@ -46,8 +46,9 @@ const inferFileName = (url: string, contentType: string): string => {
   return `${base}.${ext || 'mp3'}`;
 };
 
-const shouldTranscode = (contentType: string, contentLength?: number): boolean => {
-  if (contentType.startsWith('video/')) return true;
+const shouldTranscode = (contentType: string, contentLength?: number, force?: boolean): boolean => {
+  if (force) return true;
+  if (!contentType.startsWith('audio/')) return true;
   if (typeof contentLength === 'number' && contentLength > MAX_UPLOAD_BYTES) return true;
   return false;
 };
@@ -92,6 +93,55 @@ const transcodeToMp3 = async (inputPath: string, outputPath: string) => {
   });
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableTranscriptionError = (error: any): boolean => {
+  const message = String(error?.message || '');
+  const causeMessage = String(error?.cause?.message || '');
+  const code = String(error?.code || error?.cause?.code || '');
+
+  return (
+    message.includes('Connection error') ||
+    message.includes('ECONNRESET') ||
+    message.includes('ETIMEDOUT') ||
+    causeMessage.includes('ECONNRESET') ||
+    causeMessage.includes('ETIMEDOUT') ||
+    causeMessage.includes('EAI_AGAIN') ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EAI_AGAIN'
+  );
+};
+
+const transcribeWithRetry = async (
+  openai: any,
+  createFile: () => any,
+  attempts = 3
+) => {
+  let lastError: any;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        console.log(`[BelchiorReceitas] 🔁 Retry transcrição ${attempt}/${attempts}`);
+      }
+      return await openai.audio.transcriptions.create(
+        {
+          file: createFile(),
+          model: 'whisper-1',
+        },
+        { maxRetries: 0 }
+      );
+    } catch (error: any) {
+      lastError = error;
+      if (!isRetryableTranscriptionError(error) || attempt === attempts) {
+        throw error;
+      }
+      await sleep(500 * attempt * attempt);
+    }
+  }
+  throw lastError;
+};
+
 export async function POST(request: NextRequest) {
   console.log('[BelchiorReceitas] Iniciando processamento de vídeo');
   
@@ -116,6 +166,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const isTikTokUrl = /tiktok\.com|vt\.tiktok|vm\.tiktok/.test(videoUrl);
+    const isInstagramUrl = /instagram\.com/.test(videoUrl);
     
     console.log('[BelchiorReceitas] URL recebida:', videoUrl);
     
@@ -210,53 +263,61 @@ export async function POST(request: NextRequest) {
           fileName,
         });
 
-        if (shouldTranscode(contentType, contentLength)) {
-          const { join } = await import('path');
-          const { tmpdir } = await import('os');
-          const inputPath = join(tmpdir(), `belchior-${Date.now()}-${Math.random().toString(36).slice(2)}.${fileName.split('.').pop() || 'media'}`);
-          const outputPath = join(tmpdir(), `belchior-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
+        const { join } = await import('path');
+        const { tmpdir } = await import('os');
+        const inputPath = join(
+          tmpdir(),
+          `belchior-${generateId()}.${fileName.split('.').pop() || 'media'}`
+        );
+        extraCleanupPaths.push(inputPath);
 
-          extraCleanupPaths.push(inputPath, outputPath);
+        await streamResponseToFile(audioResponse.body, inputPath);
 
-          await streamResponseToFile(audioResponse.body, inputPath);
+        const forceTranscode = isTikTokUrl || isInstagramUrl;
+        let transcriptionPath = inputPath;
+
+        if (shouldTranscode(contentType, contentLength, forceTranscode)) {
+          const outputPath = join(tmpdir(), `belchior-${generateId()}.mp3`);
+          extraCleanupPaths.push(outputPath);
           await transcodeToMp3(inputPath, outputPath);
-
-          const { stat } = await import('fs/promises');
-          const outputStat = await stat(outputPath);
-          if (outputStat.size > MAX_UPLOAD_BYTES) {
-            throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
-          }
-
-          console.log('[BelchiorReceitas] Áudio convertido:', {
-            outputBytes: outputStat.size,
-          });
-
-          const audioFile: any = createReadStream(outputPath);
-          response = await openai.audio.transcriptions.create({
-            file: audioFile,
-            model: 'whisper-1',
-          });
-        } else {
-          const audioBuffer = await audioResponse.arrayBuffer();
-
-          // Criar um objeto File-like para o Whisper
-          const audioFile = new File([audioBuffer], fileName, { type: contentType });
-
-          response = await openai.audio.transcriptions.create({
-            file: audioFile as any,
-            model: 'whisper-1',
-            // Sem 'language' para detecção automática!
-          });
+          transcriptionPath = outputPath;
         }
+
+        const { stat } = await import('fs/promises');
+        const outputStat = await stat(transcriptionPath);
+        if (outputStat.size > MAX_UPLOAD_BYTES) {
+          throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
+        }
+
+        console.log('[BelchiorReceitas] Áudio pronto para transcrição:', {
+          outputBytes: outputStat.size,
+          transcoded: transcriptionPath !== inputPath,
+        });
+
+        response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
       } else if (audioPath) {
         // Se tem audioPath, usar createReadStream
         console.log('[BelchiorReceitas] Enviando arquivo local para Whisper...');
-        const audioFile: any = createReadStream(audioPath);
-        response = await openai.audio.transcriptions.create({
-          file: audioFile,
-          model: 'whisper-1',
-          // Sem 'language' para detecção automática!
-        });
+        const { stat } = await import('fs/promises');
+        const { join } = await import('path');
+        const { tmpdir } = await import('os');
+
+        const inputStat = await stat(audioPath);
+        let transcriptionPath = audioPath;
+
+        if (inputStat.size > MAX_UPLOAD_BYTES) {
+          const outputPath = join(tmpdir(), `belchior-${generateId()}.mp3`);
+          extraCleanupPaths.push(outputPath);
+          await transcodeToMp3(audioPath, outputPath);
+          transcriptionPath = outputPath;
+        }
+
+        const outputStat = await stat(transcriptionPath);
+        if (outputStat.size > MAX_UPLOAD_BYTES) {
+          throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
+        }
+
+        response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
       } else {
         throw new Error('Nenhuma fonte de áudio disponível');
       }
