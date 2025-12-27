@@ -13,6 +13,26 @@ type DownloadResult = {
 
 let ytDlpBinaryPathPromise: Promise<string> | null = null;
 
+type TikTokOEmbed = {
+  title?: string;
+  author_name?: string;
+};
+
+async function fetchTikTokOEmbed(url: string): Promise<TikTokOEmbed | null> {
+  try {
+    const response = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+      },
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('[BelchiorReceitas] Falha ao buscar oEmbed do TikTok:', (error as any)?.message);
+    return null;
+  }
+}
+
 async function resolveYtDlpBinaryPath(): Promise<string> {
   const envPath = process.env.YTDLP_PATH;
   if (envPath) return envPath;
@@ -163,8 +183,22 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
     ? { ...metadataFromApi, ...metadataFromYtDlp }
     : metadataFromApi || null;
 
-  if (mergedMetadata && !mergedMetadata.platform && detectedPlatform) {
-    mergedMetadata.platform = detectedPlatform;
+  let finalMetadata = mergedMetadata ? { ...mergedMetadata } : null;
+
+  if (detectedPlatform === 'tiktok' && !finalMetadata?.description) {
+    const oembed = await fetchTikTokOEmbed(url);
+    const oembedTitle = oembed?.title?.trim();
+    if (oembedTitle) {
+      finalMetadata = {
+        ...(finalMetadata || { platform: 'tiktok' as const }),
+        title: finalMetadata?.title || oembedTitle,
+        description: oembedTitle,
+      };
+    }
+  }
+
+  if (finalMetadata && !finalMetadata.platform && detectedPlatform) {
+    finalMetadata.platform = detectedPlatform;
   }
 
   // Retornar áudio + metadados
@@ -172,7 +206,7 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
     ...result,
     thumbnailUrl,
     thumbnailSource,
-    metadata: mergedMetadata,
+    metadata: finalMetadata,
   };
 }
 
