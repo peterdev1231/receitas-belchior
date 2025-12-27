@@ -7,6 +7,7 @@ type DownloadResult = {
   cleanup: () => Promise<void>;
   thumbnailUrl?: string;
   thumbnailSource?: string;
+  metadata?: VideoMetadata;
 };
 
 let ytDlpBinaryPathPromise: Promise<string> | null = null;
@@ -115,19 +116,23 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
 
   console.log('[BelchiorReceitas] Detectando plataforma...');
 
-  // PASSO 1: Extrair metadados (descrição, título)
-  const metadata = await extractVideoMetadata(url);
-  let thumbnailUrl = metadata?.thumbnailUrl;
-  let thumbnailSource = metadata?.thumbnailUrl
-    ? (metadata?.platform === 'tiktok' ? 'tiktok-cover'
-      : metadata?.platform === 'instagram' ? 'ig-thumb'
-      : 'yt-thumb')
-    : undefined;
-
   // Detectar plataforma
   const isTikTok = url.includes('tiktok.com') || url.includes('vm.tiktok') || url.includes('vt.tiktok');
   const isInstagram = url.includes('instagram.com');
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+  const detectedPlatform = isYouTube ? 'youtube' : isTikTok ? 'tiktok' : isInstagram ? 'instagram' : undefined;
+
+  // PASSO 1: Extrair metadados (descrição, título)
+  const allowYtDlpMetadata = process.env.ENABLE_YTDLP_METADATA === '1';
+  const metadataFromYtDlp = (isYouTube || allowYtDlpMetadata) ? await extractVideoMetadata(url) : null;
+
+  const metadataPlatform = metadataFromYtDlp?.platform || detectedPlatform;
+  let thumbnailUrl = metadataFromYtDlp?.thumbnailUrl;
+  let thumbnailSource = metadataFromYtDlp?.thumbnailUrl
+    ? (metadataPlatform === 'tiktok' ? 'tiktok-cover'
+      : metadataPlatform === 'instagram' ? 'ig-thumb'
+      : 'yt-thumb')
+    : undefined;
 
   // PASSO 2: Baixar áudio
   let result: DownloadResult;
@@ -149,12 +154,21 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
   thumbnailUrl = result.thumbnailUrl || thumbnailUrl;
   thumbnailSource = result.thumbnailSource || thumbnailSource;
 
+  const metadataFromApi = result.metadata;
+  const mergedMetadata = metadataFromYtDlp
+    ? { ...metadataFromApi, ...metadataFromYtDlp }
+    : metadataFromApi || null;
+
+  if (mergedMetadata && !mergedMetadata.platform && detectedPlatform) {
+    mergedMetadata.platform = detectedPlatform;
+  }
+
   // Retornar áudio + metadados
   return {
     ...result,
     thumbnailUrl,
     thumbnailSource,
-    metadata,
+    metadata: mergedMetadata,
   };
 }
 
@@ -226,13 +240,25 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
           data.data.music_info?.playUrl;
         const videoUrl = data.data.play || data.data.wmplay || data.data.hdplay;
         const mediaUrl = audioUrl || videoUrl;
+        const cover = data.data.cover || data.data.origin_cover;
+        const description = data.data.title || data.data.desc;
+        const duration = typeof data.data.duration === 'number' ? data.data.duration : undefined;
+        const metadata: VideoMetadata | undefined = data.data
+          ? {
+              platform: 'tiktok',
+              ...(description ? { title: description, description } : {}),
+              ...(typeof duration === 'number' ? { duration } : {}),
+              ...(cover ? { thumbnailUrl: cover } : {}),
+            }
+          : undefined;
         if (mediaUrl) {
           console.log(
             `[BelchiorReceitas] ✅ TikWM: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
           );
           return {
             videoUrl: mediaUrl,
-            thumbnailUrl: data.data.cover || data.data.origin_cover,
+            thumbnailUrl: cover,
+            metadata,
           };
         }
       }
@@ -252,16 +278,30 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
       const data = await response.json();
 
       // Tentar extrair URL do vídeo da resposta
-      const videoData = data?.aweme_list?.[0]?.video;
+      const aweme = data?.aweme_list?.[0];
+      const videoData = aweme?.video;
       const videoUrl = videoData?.play_addr?.url_list?.[0];
-      const audioUrl = data?.aweme_list?.[0]?.music?.play_url?.url_list?.[0];
+      const audioUrl = aweme?.music?.play_url?.url_list?.[0];
       const cover = videoData?.cover?.url_list?.[0] || videoData?.origin_cover?.url_list?.[0];
+      const description = aweme?.desc;
+      const durationRaw = aweme?.duration;
+      const duration = typeof durationRaw === 'number'
+        ? (durationRaw > 1000 ? Math.round(durationRaw / 1000) : durationRaw)
+        : undefined;
+      const metadata: VideoMetadata | undefined = aweme
+        ? {
+            platform: 'tiktok',
+            ...(description ? { title: description, description } : {}),
+            ...(typeof duration === 'number' ? { duration } : {}),
+            ...(cover ? { thumbnailUrl: cover } : {}),
+          }
+        : undefined;
       const mediaUrl = audioUrl || videoUrl;
       if (mediaUrl) {
         console.log(
           `[BelchiorReceitas] ✅ TikTokDownloader: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
         );
-        return { videoUrl: mediaUrl, thumbnailUrl: cover };
+        return { videoUrl: mediaUrl, thumbnailUrl: cover, metadata };
       }
       throw new Error('URL não encontrada na resposta');
     }

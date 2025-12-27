@@ -16,6 +16,10 @@ const parseYouTubeId = (url: string): string | null => {
   return match ? match[1] : null;
 };
 
+const shouldUseYtDlpMetadata = (platform?: string) => {
+  return platform === 'youtube' || !platform || process.env.ENABLE_YTDLP_METADATA === '1';
+};
+
 async function fetchTikTokCover(url: string): Promise<string | undefined> {
   const apis = [
     async () => {
@@ -119,18 +123,20 @@ export async function POST(request: NextRequest) {
 
     // 1) Tenta via metadados (yt-dlp --dump-json)
     try {
-      const metadata = await extractVideoMetadata(videoUrl);
-      if (metadata?.thumbnailUrl) {
-        imageUrl = metadata.thumbnailUrl;
-        imageSource =
-          platform === 'tiktok'
-            ? 'tiktok-cover'
-            : platform === 'instagram'
-              ? 'ig-thumb'
-              : 'yt-thumb';
-      } else if (metadata?.thumbnails && metadata.thumbnails.length > 0) {
-        imageUrl = metadata.thumbnails[metadata.thumbnails.length - 1];
-        imageSource = platform === 'instagram' ? 'ig-thumb' : 'yt-thumb';
+      if (shouldUseYtDlpMetadata(platform)) {
+        const metadata = await extractVideoMetadata(videoUrl);
+        if (metadata?.thumbnailUrl) {
+          imageUrl = metadata.thumbnailUrl;
+          imageSource =
+            platform === 'tiktok'
+              ? 'tiktok-cover'
+              : platform === 'instagram'
+                ? 'ig-thumb'
+                : 'yt-thumb';
+        } else if (metadata?.thumbnails && metadata.thumbnails.length > 0) {
+          imageUrl = metadata.thumbnails[metadata.thumbnails.length - 1];
+          imageSource = platform === 'instagram' ? 'ig-thumb' : 'yt-thumb';
+        }
       }
     } catch (error) {
       console.warn('[BelchiorReceitas] Falha ao obter metadados na rota recipe-image:', (error as any)?.message);
