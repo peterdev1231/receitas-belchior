@@ -7,7 +7,7 @@ type DownloadResult = {
   cleanup: () => Promise<void>;
   thumbnailUrl?: string;
   thumbnailSource?: string;
-  metadata?: VideoMetadata;
+  metadata?: VideoMetadata | null;
 };
 
 let ytDlpBinaryPathPromise: Promise<string> | null = null;
