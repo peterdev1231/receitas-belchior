@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+const SUPPORTED_EXTENSIONS = new Set(['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm']);
 
 const normalizeContentType = (value: string | null): string => {
   return value ? value.split(';')[0].trim() : 'application/octet-stream';
@@ -45,13 +46,6 @@ const inferFileName = (url: string, contentType: string): string => {
 
   const base = contentType.startsWith('video/') ? 'video' : 'audio';
   return `${base}.${ext || 'mp3'}`;
-};
-
-const shouldTranscode = (contentType: string, contentLength?: number, force?: boolean): boolean => {
-  if (force) return true;
-  if (!contentType.startsWith('audio/')) return true;
-  if (typeof contentLength === 'number' && contentLength > MAX_UPLOAD_BYTES) return true;
-  return false;
 };
 
 const streamResponseToFile = async (response: any, filePath: string) => {
@@ -314,33 +308,51 @@ export async function POST(request: NextRequest) {
 
         const { join } = await import('path');
         const { tmpdir } = await import('os');
-        const inputPath = join(
-          tmpdir(),
-          `belchior-${generateId()}.${fileName.split('.').pop() || 'media'}`
-        );
+        const fileExt = fileName.split('.').pop()?.toLowerCase() || '';
+        const inputPath = join(tmpdir(), `belchior-${generateId()}.${fileExt || 'media'}`);
         extraCleanupPaths.push(inputPath);
 
         await streamResponseToFile(audioResponse, inputPath);
 
-        const forceTranscode = isTikTokUrl || isInstagramUrl;
-        let transcriptionPath = inputPath;
+        const { stat } = await import('fs/promises');
+        const inputStat = await stat(inputPath);
+        const isAudioOrVideo = contentType.startsWith('audio/') || contentType.startsWith('video/');
+        const canUploadOriginal =
+          inputStat.size <= MAX_UPLOAD_BYTES &&
+          (isAudioOrVideo || SUPPORTED_EXTENSIONS.has(fileExt));
 
-        if (shouldTranscode(contentType, contentLength, forceTranscode)) {
-          const outputPath = join(tmpdir(), `belchior-${generateId()}.mp3`);
-          extraCleanupPaths.push(outputPath);
-          await transcodeToMp3(inputPath, outputPath);
-          transcriptionPath = outputPath;
+        let transcriptionPath = inputPath;
+        let transcoded = false;
+
+        const needsTranscode =
+          inputStat.size > MAX_UPLOAD_BYTES ||
+          (!isAudioOrVideo && !SUPPORTED_EXTENSIONS.has(fileExt));
+
+        if (needsTranscode) {
+          try {
+            const outputPath = join(tmpdir(), `belchior-${generateId()}.mp3`);
+            extraCleanupPaths.push(outputPath);
+            await transcodeToMp3(inputPath, outputPath);
+            transcriptionPath = outputPath;
+            transcoded = true;
+          } catch (error: any) {
+            if (!canUploadOriginal) {
+              throw error;
+            }
+            console.warn('[BelchiorReceitas] Falha ao converter áudio, usando original:', {
+              message: error?.message || error,
+            });
+          }
         }
 
-        const { stat } = await import('fs/promises');
-        const outputStat = await stat(transcriptionPath);
+        const outputStat = transcriptionPath === inputPath ? inputStat : await stat(transcriptionPath);
         if (outputStat.size > MAX_UPLOAD_BYTES) {
           throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
         }
 
         console.log('[BelchiorReceitas] Áudio pronto para transcrição:', {
           outputBytes: outputStat.size,
-          transcoded: transcriptionPath !== inputPath,
+          transcoded,
         });
 
         response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
@@ -353,18 +365,25 @@ export async function POST(request: NextRequest) {
 
         const inputStat = await stat(audioPath);
         let transcriptionPath = audioPath;
+        let transcoded = false;
 
         if (inputStat.size > MAX_UPLOAD_BYTES) {
           const outputPath = join(tmpdir(), `belchior-${generateId()}.mp3`);
           extraCleanupPaths.push(outputPath);
           await transcodeToMp3(audioPath, outputPath);
           transcriptionPath = outputPath;
+          transcoded = true;
         }
 
         const outputStat = await stat(transcriptionPath);
         if (outputStat.size > MAX_UPLOAD_BYTES) {
           throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
         }
+
+        console.log('[BelchiorReceitas] Áudio pronto para transcrição:', {
+          outputBytes: outputStat.size,
+          transcoded,
+        });
 
         response = await transcribeWithRetry(openai, () => createReadStream(transcriptionPath));
       } else {
