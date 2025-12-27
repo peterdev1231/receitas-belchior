@@ -8,6 +8,7 @@ type DownloadResult = {
   thumbnailUrl?: string;
   thumbnailSource?: string;
   metadata?: VideoMetadata | null;
+  audioSource?: 'tiktok-video' | 'tiktok-music' | 'youtube' | 'instagram' | 'other';
 };
 
 let ytDlpBinaryPathPromise: Promise<string> | null = null;
@@ -139,15 +140,18 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
   if (isYouTube) {
     // YouTube usa yt-dlp (com arquivo local)
     result = await downloadWithYtDlp(url, audioPath);
+    result.audioSource = 'youtube';
   } else if (isTikTok) {
     // TikTok usa API - retorna URL direto (sem arquivo local)
     result = await downloadTikTokViaAPI(url);
   } else if (isInstagram) {
     // Instagram usa API - retorna URL direto (sem arquivo local)
     result = await downloadInstagramViaAPI(url);
+    result.audioSource = 'instagram';
   } else {
     // Fallback: tentar com yt-dlp
     result = await downloadWithYtDlp(url, audioPath);
+    result.audioSource = 'other';
   }
 
   // Consolidar thumbnail se veio do download específico
@@ -239,7 +243,11 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
           data.data.music_info?.play_url?.[0] ||
           data.data.music_info?.playUrl;
         const videoUrl = data.data.play || data.data.wmplay || data.data.hdplay;
-        const mediaUrl = audioUrl || videoUrl;
+        const preferMusic = process.env.TIKTOK_PREFER_MUSIC_AUDIO === '1';
+        const mediaUrl = preferMusic ? (audioUrl || videoUrl) : (videoUrl || audioUrl);
+        const audioSource: 'tiktok-video' | 'tiktok-music' | undefined = mediaUrl
+          ? (mediaUrl === videoUrl ? 'tiktok-video' : 'tiktok-music')
+          : undefined;
         const cover = data.data.cover || data.data.origin_cover;
         const description = data.data.title || data.data.desc;
         const duration = typeof data.data.duration === 'number' ? data.data.duration : undefined;
@@ -253,12 +261,13 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
           : undefined;
         if (mediaUrl) {
           console.log(
-            `[BelchiorReceitas] ✅ TikWM: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
+            `[BelchiorReceitas] ✅ TikWM: URL de ${audioSource === 'tiktok-video' ? 'vídeo' : 'áudio'} obtida`
           );
           return {
             videoUrl: mediaUrl,
             thumbnailUrl: cover,
             metadata,
+            audioSource,
           };
         }
       }
@@ -282,6 +291,7 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
       const videoData = aweme?.video;
       const videoUrl = videoData?.play_addr?.url_list?.[0];
       const audioUrl = aweme?.music?.play_url?.url_list?.[0];
+      const preferMusic = process.env.TIKTOK_PREFER_MUSIC_AUDIO === '1';
       const cover = videoData?.cover?.url_list?.[0] || videoData?.origin_cover?.url_list?.[0];
       const description = aweme?.desc;
       const durationRaw = aweme?.duration;
@@ -296,12 +306,15 @@ async function downloadTikTokViaAPI(url: string): Promise<DownloadResult> {
             ...(cover ? { thumbnailUrl: cover } : {}),
           }
         : undefined;
-      const mediaUrl = audioUrl || videoUrl;
+      const mediaUrl = preferMusic ? (audioUrl || videoUrl) : (videoUrl || audioUrl);
+      const audioSource: 'tiktok-video' | 'tiktok-music' | undefined = mediaUrl
+        ? (mediaUrl === videoUrl ? 'tiktok-video' : 'tiktok-music')
+        : undefined;
       if (mediaUrl) {
         console.log(
-          `[BelchiorReceitas] ✅ TikTokDownloader: URL de ${audioUrl ? 'áudio' : 'vídeo'} obtida`
+          `[BelchiorReceitas] ✅ TikTokDownloader: URL de ${audioSource === 'tiktok-video' ? 'vídeo' : 'áudio'} obtida`
         );
-        return { videoUrl: mediaUrl, thumbnailUrl: cover, metadata };
+        return { videoUrl: mediaUrl, thumbnailUrl: cover, metadata, audioSource };
       }
       throw new Error('URL não encontrada na resposta');
     }

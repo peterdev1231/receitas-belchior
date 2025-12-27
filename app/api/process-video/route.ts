@@ -487,6 +487,7 @@ export async function POST(request: NextRequest) {
     let metadata: any = null;
     let thumbnailUrl: string | undefined;
     let thumbnailSource: string | undefined;
+    let audioSource: string | undefined;
     const extraCleanupPaths: string[] = [];
 
     try {
@@ -497,6 +498,7 @@ export async function POST(request: NextRequest) {
       metadata = result.metadata;
       thumbnailUrl = result.thumbnailUrl;
       thumbnailSource = result.thumbnailSource;
+      audioSource = result.audioSource;
       console.log('[BelchiorReceitas] ✅ Áudio obtido com sucesso');
 
       if (audioUrl) {
@@ -511,6 +513,9 @@ export async function POST(request: NextRequest) {
           hasDescription: !!metadata.description,
           descLength: metadata.description?.length || 0,
         });
+      }
+      if (audioSource) {
+        console.log('[BelchiorReceitas] Fonte de áudio:', audioSource);
       }
     } catch (error: any) {
       const errorMsg = error?.message || error?.toString() || '';
@@ -661,6 +666,31 @@ export async function POST(request: NextRequest) {
         idioma: idiomaDetectado,
         preview: transcricao.substring(0, 100) + '...'
       });
+
+      const contentCheck = analyzeTranscriptionContent(transcricao, metadata?.description);
+      console.log('[BelchiorReceitas] Sinais de receita:', {
+        score: contentCheck.score,
+        quantities: contentCheck.quantityCount,
+        cookingHits: contentCheck.cookingHits,
+        foodHits: contentCheck.foodHits,
+        descriptionHasQuantities: contentCheck.descriptionHasQuantities,
+      });
+
+      if (contentCheck.isLikelyMusic && !contentCheck.descriptionHasQuantities) {
+        await cleanup();
+        if (extraCleanupPaths.length > 0) {
+          const { unlink } = await import('fs/promises');
+          await Promise.all(extraCleanupPaths.map((p) => unlink(p).catch(() => {})));
+        }
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'O áudio parece ser música ou não contém instruções de receita. Tente um vídeo com narração ou descrição com ingredientes.',
+          },
+          { status: 422 }
+        );
+      }
     } catch (error: any) {
       console.error('[BelchiorReceitas] Erro na transcrição:', {
         message: error?.message || error,
@@ -700,6 +730,94 @@ export async function POST(request: NextRequest) {
       }
       
       return 'pt'; // padrão
+    }
+
+    function analyzeTranscriptionContent(text: string, description?: string) {
+      const normalized = ` ${text.toLowerCase()} `;
+      const descriptionText = description?.toLowerCase() || '';
+
+      const quantityPattern = /\b\d+([.,]\d+)?\s?(g|kg|ml|l|x[ií]cara|colher(es)?|tbsp|tsp|grama(s)?|litro(s)?|min|minutos|seg|segundos)\b/gi;
+      const cookingWords = [
+        'ingrediente',
+        'ingredientes',
+        'xícara',
+        'xicara',
+        'colher',
+        'colheres',
+        'sopa',
+        'chá',
+        'misture',
+        'adicione',
+        'coloque',
+        'bata',
+        'leve ao forno',
+        'preaqueça',
+        'pré-aqueça',
+        'asse',
+        'cozinhe',
+        'refogue',
+        'picado',
+        'corte',
+        'pique',
+        'fogo',
+        'panela',
+        'frigideira',
+        'forma',
+        'forno',
+        'minuto',
+        'minutos',
+      ];
+      const foodWords = [
+        'farinha',
+        'açúcar',
+        'acucar',
+        'sal',
+        'óleo',
+        'oleo',
+        'leite',
+        'manteiga',
+        'ovo',
+        'ovos',
+        'queijo',
+        'chocolate',
+        'creme',
+        'fermento',
+        'massa',
+        'arroz',
+        'feijão',
+        'feijao',
+        'frango',
+        'carne',
+        'peixe',
+        'batata',
+        'cebola',
+        'alho',
+        'tomate',
+        'limão',
+        'limao',
+      ];
+
+      const quantityMatches = text.match(quantityPattern) || [];
+      const cookingHits = cookingWords.filter((word) => normalized.includes(` ${word} `)).length;
+      const foodHits = foodWords.filter((word) => normalized.includes(` ${word} `)).length;
+      const descriptionHasQuantities = quantityPattern.test(descriptionText);
+
+      const score = quantityMatches.length * 3 + cookingHits * 2 + foodHits;
+      const wordCount = normalized.trim().split(/\s+/).length;
+
+      const isLikelyRecipe = score >= 3 || (descriptionHasQuantities && wordCount > 30);
+      const isLikelyMusic = !isLikelyRecipe && wordCount > 40 && quantityMatches.length === 0 && cookingHits === 0;
+
+      return {
+        score,
+        quantityCount: quantityMatches.length,
+        cookingHits,
+        foodHits,
+        wordCount,
+        descriptionHasQuantities,
+        isLikelyRecipe,
+        isLikelyMusic,
+      };
     }
     
     // 3. Organização com GPT-4o-mini (combinando descrição + transcrição)
