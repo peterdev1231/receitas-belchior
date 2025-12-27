@@ -9,12 +9,56 @@ type DownloadResult = {
   thumbnailSource?: string;
 };
 
+let ytDlpBinaryPathPromise: Promise<string> | null = null;
+
+async function resolveYtDlpBinaryPath(): Promise<string> {
+  const envPath = process.env.YTDLP_PATH;
+  if (envPath) return envPath;
+
+  if (!ytDlpBinaryPathPromise) {
+    ytDlpBinaryPathPromise = (async () => {
+      const { tmpdir } = await import('os');
+      const { join } = await import('path');
+      const { access, stat } = await import('fs/promises');
+
+      const binaryName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+      const binaryPath = join(tmpdir(), binaryName);
+
+      try {
+        await access(binaryPath);
+        const fileStat = await stat(binaryPath);
+        if (fileStat.size > 0) {
+          return binaryPath;
+        }
+      } catch {
+        // Binary not available yet.
+      }
+
+      console.log('[BelchiorReceitas] yt-dlp não encontrado no runtime; baixando binário...');
+      const { default: YTDlpWrap } = await import('yt-dlp-wrap');
+      await YTDlpWrap.downloadFromGithub(binaryPath);
+      return binaryPath;
+    })();
+
+    ytDlpBinaryPathPromise.catch(() => {
+      ytDlpBinaryPathPromise = null;
+    });
+  }
+
+  return ytDlpBinaryPathPromise;
+}
+
+async function createYtDlpWrap() {
+  const { default: YTDlpWrap } = await import('yt-dlp-wrap');
+  const binaryPath = await resolveYtDlpBinaryPath();
+  return new YTDlpWrap(binaryPath);
+}
+
 // Extrair metadados do vídeo (descrição, título, etc)
 export async function extractVideoMetadata(url: string): Promise<VideoMetadata | null> {
   try {
     console.log('[BelchiorReceitas] Extraindo metadados do vídeo...');
-    const { default: YTDlpWrap } = await import('yt-dlp-wrap');
-    const ytDlpWrap = new YTDlpWrap();
+    const ytDlpWrap = await createYtDlpWrap();
     
     const metadataJson = await ytDlpWrap.execPromise([
       url,
@@ -116,11 +160,9 @@ export async function downloadVideoViaAPI(url: string): Promise<DownloadResult &
 
 // Download com yt-dlp (YouTube)
 async function downloadWithYtDlp(url: string, audioPath: string): Promise<DownloadResult> {
-  const { default: YTDlpWrap } = await import('yt-dlp-wrap');
-  
   console.log('[BelchiorReceitas] Usando yt-dlp para YouTube...');
   
-  const ytDlpWrap = new YTDlpWrap();
+  const ytDlpWrap = await createYtDlpWrap();
   
   try {
     await ytDlpWrap.execPromise([
