@@ -37,6 +37,59 @@ const parseJsonResponse = <T>(raw: string): T => {
   }
 };
 
+const trimForRepair = (raw: string, limit = 8000) => {
+  if (raw.length <= limit) return raw;
+  return `${raw.slice(0, limit)}\n...`;
+};
+
+const getGeminiModelName = (envKey: string, fallback = 'gemini-3-flash-preview'): string => {
+  return process.env[envKey] || process.env.GEMINI_MODEL || fallback;
+};
+
+const geminiRepairJson = async ({
+  modelName,
+  schema,
+  raw,
+}: {
+  modelName: string;
+  schema: any;
+  raw: string;
+}): Promise<string> => {
+  const { GoogleGenerativeAI } = await import('@google/generative-ai');
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY não configurada');
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    systemInstruction: 'Você é um corretor de JSON. Retorne apenas JSON válido.',
+  });
+
+  const result = await model.generateContent({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text: `Corrija o JSON inválido abaixo e retorne APENAS um JSON válido que siga o schema solicitado.\n\nJSON inválido:\n${trimForRepair(raw)}`,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: schema,
+    },
+  });
+
+  const text = result.response?.text?.();
+  if (!text) throw new Error('Resposta vazia do Gemini');
+  return text.trim();
+};
+
 let cachedAnalysisSchema: any | null = null;
 
 const getAnalysisSchema = async () => {
@@ -192,7 +245,7 @@ IMPORTANTE:
     if (useGemini) {
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-      const modelName = process.env.GEMINI_RECOMMEND_MODEL || process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+      const modelName = getGeminiModelName('GEMINI_RECOMMEND_MODEL');
       const model = genAI.getGenerativeModel({
         model: modelName,
         systemInstruction:
@@ -246,9 +299,19 @@ IMPORTANTE:
     try {
       analysis = parseJsonResponse<AIAnalysis>(cleanedResponse);
     } catch (parseError) {
-      console.error('[BelchiorReceitas] Erro ao parsear resposta da IA:', parseError);
-      console.error('[BelchiorReceitas] Resposta recebida:', cleanedResponse.substring(0, 500));
-      throw new Error('Resposta inválida da IA');
+      if (useGemini) {
+        console.warn('[BelchiorReceitas] JSON inválido do Gemini, tentando corrigir...', parseError);
+        const repaired = await geminiRepairJson({
+          modelName: getGeminiModelName('GEMINI_REPAIR_MODEL', 'gemini-2.5-flash'),
+          schema: await getAnalysisSchema(),
+          raw: cleanedResponse,
+        });
+        analysis = parseJsonResponse<AIAnalysis>(repaired);
+      } else {
+        console.error('[BelchiorReceitas] Erro ao parsear resposta da IA:', parseError);
+        console.error('[BelchiorReceitas] Resposta recebida:', cleanedResponse.substring(0, 500));
+        throw new Error('Resposta inválida da IA');
+      }
     }
 
     // Mapear índices das receitas para objetos completos

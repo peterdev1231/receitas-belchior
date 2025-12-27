@@ -37,8 +37,8 @@ const inferMimeTypeFromPath = (filePath: string, fallback?: string): string => {
   return AUDIO_MIME_BY_EXT[ext] || fallback || 'audio/mpeg';
 };
 
-const getGeminiModelName = (envKey: string): string => {
-  return process.env[envKey] || process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+const getGeminiModelName = (envKey: string, fallback = DEFAULT_GEMINI_MODEL): string => {
+  return process.env[envKey] || process.env.GEMINI_MODEL || fallback;
 };
 
 const parseJsonResponse = <T>(raw: string): T => {
@@ -58,6 +58,11 @@ const parseJsonResponse = <T>(raw: string): T => {
     }
     throw new Error('Resposta inválida da IA');
   }
+};
+
+const trimForRepair = (raw: string, limit = 8000) => {
+  if (raw.length <= limit) return raw;
+  return `${raw.slice(0, limit)}\n...`;
 };
 
 const inferFileName = (url: string, contentType: string): string => {
@@ -307,6 +312,27 @@ const geminiGenerateText = async ({
     throw new Error('Resposta vazia do Gemini');
   }
   return text.trim();
+};
+
+const geminiRepairJson = async ({
+  modelName,
+  schema,
+  raw,
+}: {
+  modelName: string;
+  schema: any;
+  raw: string;
+}): Promise<string> => {
+  const repairPrompt = `Corrija o JSON inválido abaixo e retorne APENAS um JSON válido que siga o schema solicitado. Não inclua comentários, explicações ou markdown.\n\nJSON inválido:\n${trimForRepair(raw)}`;
+
+  return geminiGenerateText({
+    modelName,
+    systemInstruction: 'Você é um corretor de JSON. Retorne apenas JSON válido.',
+    prompt: repairPrompt,
+    temperature: 0,
+    maxOutputTokens: 2000,
+    responseSchema: schema,
+  });
 };
 
 let cachedRecipeSchema: any | null = null;
@@ -869,7 +895,23 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
       console.log('[BelchiorReceitas] Resposta da IA:', receitaText);
       
       // Parse do JSON
-      const receitaData = parseJsonResponse<any>(receitaText);
+      let receitaData: any;
+      try {
+        receitaData = parseJsonResponse<any>(receitaText);
+      } catch (parseError: any) {
+        if (!useGemini) {
+          throw parseError;
+        }
+        console.warn('[BelchiorReceitas] JSON inválido do Gemini, tentando corrigir...', {
+          message: parseError?.message || parseError,
+        });
+        const repaired = await geminiRepairJson({
+          modelName: getGeminiModelName('GEMINI_REPAIR_MODEL', 'gemini-2.5-flash'),
+          schema: await getRecipeResponseSchema(),
+          raw: receitaText,
+        });
+        receitaData = parseJsonResponse<any>(repaired);
+      }
       
       const recipe: Recipe = {
         id: generateId(),
