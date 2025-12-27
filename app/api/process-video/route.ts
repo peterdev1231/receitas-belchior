@@ -4,6 +4,7 @@ import { generateId } from '@/lib/utils';
 
 export const maxDuration = 300; // 5 minutos
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
 
@@ -55,10 +56,34 @@ const shouldTranscode = (contentType: string, contentLength?: number, force?: bo
 
 const streamResponseToFile = async (body: ReadableStream<Uint8Array> | null, filePath: string) => {
   if (!body) throw new Error('Resposta sem corpo para download');
-  const { createWriteStream } = await import('fs');
-  const { pipeline } = await import('stream/promises');
-  const { Readable } = await import('stream');
-  const nodeStream = Readable.fromWeb(body as any);
+  const { createWriteStream } = await import('node:fs');
+  const { pipeline } = await import('node:stream/promises');
+  const { Readable } = await import('node:stream');
+
+  let nodeStream: NodeJS.ReadableStream;
+  const readableAny: any = Readable as any;
+
+  if (typeof readableAny.fromWeb === 'function') {
+    nodeStream = readableAny.fromWeb(body as any);
+  } else if (typeof (body as any)[Symbol.asyncIterator] === 'function') {
+    nodeStream = Readable.from(body as any);
+  } else if (typeof (body as any).getReader === 'function') {
+    nodeStream = Readable.from((async function* () {
+      const reader = (body as any).getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) yield value;
+        }
+      } finally {
+        reader.releaseLock?.();
+      }
+    })());
+  } else {
+    throw new Error('Stream de resposta não compatível');
+  }
+
   await pipeline(nodeStream, createWriteStream(filePath));
 };
 
