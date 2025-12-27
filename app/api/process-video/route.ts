@@ -5,8 +5,16 @@ import { generateId } from '@/lib/utils';
 export const maxDuration = 300; // 5 minutos
 export const dynamic = 'force-dynamic';
 
+const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+
 const normalizeContentType = (value: string | null): string => {
   return value ? value.split(';')[0].trim() : 'audio/mpeg';
+};
+
+const parseContentLength = (value: string | null): number | undefined => {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 const inferFileName = (url: string, contentType: string): string => {
@@ -36,6 +44,52 @@ const inferFileName = (url: string, contentType: string): string => {
 
   const base = contentType.startsWith('video/') ? 'video' : 'audio';
   return `${base}.${ext || 'mp3'}`;
+};
+
+const shouldTranscode = (contentType: string, contentLength?: number): boolean => {
+  if (contentType.startsWith('video/')) return true;
+  if (typeof contentLength === 'number' && contentLength > MAX_UPLOAD_BYTES) return true;
+  return false;
+};
+
+const streamResponseToFile = async (body: ReadableStream<Uint8Array> | null, filePath: string) => {
+  if (!body) throw new Error('Resposta sem corpo para download');
+  const { createWriteStream } = await import('fs');
+  const { pipeline } = await import('stream/promises');
+  const { Readable } = await import('stream');
+  const nodeStream = Readable.fromWeb(body as any);
+  await pipeline(nodeStream, createWriteStream(filePath));
+};
+
+const transcodeToMp3 = async (inputPath: string, outputPath: string) => {
+  const { spawn } = await import('child_process');
+  const { default: ffmpegPath } = await import('ffmpeg-static');
+
+  if (!ffmpegPath) {
+    throw new Error('ffmpeg não disponível para conversão de áudio');
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const args = [
+      '-y',
+      '-i', inputPath,
+      '-vn',
+      '-ac', '1',
+      '-ar', '16000',
+      '-b:a', '32k',
+      outputPath,
+    ];
+    const proc = spawn(ffmpegPath, args);
+    let stderr = '';
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    proc.on('error', (error) => reject(error));
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg falhou (${code}): ${stderr.substring(0, 400)}`));
+    });
+  });
 };
 
 export async function POST(request: NextRequest) {
@@ -92,6 +146,7 @@ export async function POST(request: NextRequest) {
     let metadata: any = null;
     let thumbnailUrl: string | undefined;
     let thumbnailSource: string | undefined;
+    const extraCleanupPaths: string[] = [];
 
     try {
       const result = await downloadVideoViaAPI(videoUrl);
@@ -140,12 +195,14 @@ export async function POST(request: NextRequest) {
       // Se tem audioUrl, fazer fetch e enviar como Buffer
       if (audioUrl) {
         console.log('[BelchiorReceitas] Fazendo download da URL e enviando para Whisper...');
-        const audioResponse = await fetch(audioUrl);
+        const audioResponse = await fetch(audioUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
         if (!audioResponse.ok) {
           throw new Error(`Falha ao download da URL de áudio: ${audioResponse.status}`);
         }
         const contentType = normalizeContentType(audioResponse.headers.get('content-type'));
-        const contentLength = audioResponse.headers.get('content-length');
+        const contentLength = parseContentLength(audioResponse.headers.get('content-length'));
         const fileName = inferFileName(audioUrl, contentType);
         console.log('[BelchiorReceitas] Mídia remota:', {
           contentType,
@@ -153,16 +210,44 @@ export async function POST(request: NextRequest) {
           fileName,
         });
 
-        const audioBuffer = await audioResponse.arrayBuffer();
+        if (shouldTranscode(contentType, contentLength)) {
+          const { join } = await import('path');
+          const { tmpdir } = await import('os');
+          const inputPath = join(tmpdir(), `belchior-${Date.now()}-${Math.random().toString(36).slice(2)}.${fileName.split('.').pop() || 'media'}`);
+          const outputPath = join(tmpdir(), `belchior-${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`);
 
-        // Criar um objeto File-like para o Whisper
-        const audioFile = new File([audioBuffer], fileName, { type: contentType });
+          extraCleanupPaths.push(inputPath, outputPath);
 
-        response = await openai.audio.transcriptions.create({
-          file: audioFile as any,
-          model: 'whisper-1',
-          // Sem 'language' para detecção automática!
-        });
+          await streamResponseToFile(audioResponse.body, inputPath);
+          await transcodeToMp3(inputPath, outputPath);
+
+          const { stat } = await import('fs/promises');
+          const outputStat = await stat(outputPath);
+          if (outputStat.size > MAX_UPLOAD_BYTES) {
+            throw new Error('Áudio muito grande para transcrição. Use um vídeo mais curto.');
+          }
+
+          console.log('[BelchiorReceitas] Áudio convertido:', {
+            outputBytes: outputStat.size,
+          });
+
+          const audioFile: any = createReadStream(outputPath);
+          response = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: 'whisper-1',
+          });
+        } else {
+          const audioBuffer = await audioResponse.arrayBuffer();
+
+          // Criar um objeto File-like para o Whisper
+          const audioFile = new File([audioBuffer], fileName, { type: contentType });
+
+          response = await openai.audio.transcriptions.create({
+            file: audioFile as any,
+            model: 'whisper-1',
+            // Sem 'language' para detecção automática!
+          });
+        }
       } else if (audioPath) {
         // Se tem audioPath, usar createReadStream
         console.log('[BelchiorReceitas] Enviando arquivo local para Whisper...');
@@ -195,6 +280,10 @@ export async function POST(request: NextRequest) {
         cause: error?.cause?.message || error?.cause,
       });
       await cleanup();
+      if (extraCleanupPaths.length > 0) {
+        const { unlink } = await import('fs/promises');
+        await Promise.all(extraCleanupPaths.map((p) => unlink(p).catch(() => {})));
+      }
       return NextResponse.json(
         { success: false, error: `Erro ao transcrever áudio: ${error?.message || 'Erro desconhecido'}` },
         { status: 500 }
@@ -424,6 +513,10 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
       
       // Limpar arquivo temporário
       await cleanup();
+      if (extraCleanupPaths.length > 0) {
+        const { unlink } = await import('fs/promises');
+        await Promise.all(extraCleanupPaths.map((p) => unlink(p).catch(() => {})));
+      }
       
       return NextResponse.json({
         success: true,
@@ -433,6 +526,10 @@ IMPORTANTE: Mantenha CADA ingrediente como um item SEPARADO com sua quantidade E
     } catch (error: any) {
       console.error('[BelchiorReceitas] Erro ao organizar receita:', error?.message || error);
       await cleanup();
+      if (extraCleanupPaths.length > 0) {
+        const { unlink } = await import('fs/promises');
+        await Promise.all(extraCleanupPaths.map((p) => unlink(p).catch(() => {})));
+      }
       return NextResponse.json(
         { success: false, error: `Erro ao processar receita: ${error?.message || 'Erro desconhecido'}` },
         { status: 500 }
